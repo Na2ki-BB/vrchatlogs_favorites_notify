@@ -1,0 +1,12 @@
+# secrets
+.env
+*.env
+
+# build
+vrchat-notify
+bin/
+dist/
+
+# misc
+*.log
+.DS_Store
