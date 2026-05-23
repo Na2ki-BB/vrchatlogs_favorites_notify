@@ -1,5 +1,5 @@
 
-# vrchat-friend-notify (WebSocket → Discord)
+# vrchat-friend-notify (WebSocket → )
 
 A small tool that listens to VRChat WebSocket events (`friend-online`, `friend-offline`, `friend-location`)
 and sends notifications to a Discord webhook when a specific user’s state changes.
