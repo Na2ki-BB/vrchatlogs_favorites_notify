@@ -84,6 +84,37 @@ func notifyDiscord(webhookURL, msg string) {
 		log.Printf("discord non-2xx: %d body=%s\n", res.StatusCode, string(body))
 	}
 }
+func notifyOnlineStatus(webhookURL, status, userID, platform string) {
+	msg := fmt.Sprintf("%s\n%s\n%s\n%s", status, userID, platform, time.Now().Format("15:04"))
+
+	log.Printf("[STATUS] %s user=%s platform=%s\n", status, userID, platform)
+	notifyDiscord(webhookURL, msg)
+}
+
+func notifyWorldMove(webhookURL, userID, worldName, location, travelingToLocation, worldID string) {
+	destination := worldName
+
+	if destination == "" && travelingToLocation != "" {
+		destination = travelingToLocation
+	}
+
+	if destination == "" && location != "" {
+		destination = location
+	}
+
+	if destination == "" && worldID != "" {
+		destination = worldID
+	}
+
+	if destination == "" {
+		destination = "unknown"
+	}
+
+	msg := fmt.Sprintf("MOVE\n%s\n%s\n%s", userID, destination, time.Now().Format("15:04"))
+
+	log.Printf("[WORLD MOVE] user=%s destination=%s location=%s worldId=%s\n", userID, destination, location, worldID)
+	notifyDiscord(webhookURL, msg)
+}
 
 func fetchFavoriteFriendIDs(token, twoFactorToken, tag string) (map[string]bool, error) {
 	params := url.Values{}
@@ -286,9 +317,7 @@ func main() {
 				}
 
 				if isTargetFriend(v.UserID) {
-					msg := fmt.Sprintf("[ONLINE] %s platform=%s location=%s", v.UserID, v.Platform, v.Location)
-					log.Println(msg)
-					notifyDiscord(discordWebhook, msg)
+					notifyOnlineStatus(discordWebhook, "ONLINE", v.UserID, v.Platform)
 				}
 
 			case "friend-offline":
@@ -299,9 +328,7 @@ func main() {
 				}
 
 				if isTargetFriend(v.UserID) {
-					msg := fmt.Sprintf("[OFFLINE] %s", v.UserID)
-					log.Println(msg)
-					notifyDiscord(discordWebhook, msg)
+					notifyOnlineStatus(discordWebhook, "OFFLINE", v.UserID, v.Platform)
 				}
 
 			case "friend-location":
@@ -314,27 +341,14 @@ func main() {
 				if isTargetFriend(v.UserID) {
 					name := getWorldName(token, v.WorldID)
 
-					if v.Location == "traveling" && v.TravelingToLocation != "" {
-						if name != "" {
-							msg := fmt.Sprintf("[MOVE] %s traveling→ %s", v.UserID, name)
-							log.Println(msg)
-							notifyDiscord(discordWebhook, msg)
-						} else {
-							msg := fmt.Sprintf("[MOVE] %s traveling→ %s (worldId=%s)", v.UserID, v.TravelingToLocation, v.WorldID)
-							log.Println(msg)
-							notifyDiscord(discordWebhook, msg)
-						}
-					} else {
-						if name != "" {
-							msg := fmt.Sprintf("[MOVE] %s world=%s (location=%s, worldId=%s)", v.UserID, name, v.Location, v.WorldID)
-							log.Println(msg)
-							notifyDiscord(discordWebhook, msg)
-						} else {
-							msg := fmt.Sprintf("[MOVE] %s location=%s (worldId=%s)", v.UserID, v.Location, v.WorldID)
-							log.Println(msg)
-							notifyDiscord(discordWebhook, msg)
-						}
-					}
+					notifyWorldMove(
+						discordWebhook,
+						v.UserID,
+						name,
+						v.Location,
+						v.TravelingToLocation,
+						v.WorldID,
+					)
 				}
 			}
 		}
