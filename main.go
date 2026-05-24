@@ -84,35 +84,23 @@ func notifyDiscord(webhookURL, msg string) {
 		log.Printf("discord non-2xx: %d body=%s\n", res.StatusCode, string(body))
 	}
 }
-func notifyOnlineStatus(webhookURL, status, userID, platform string) {
-	msg := fmt.Sprintf("%s\n%s\n%s\n%s", status, userID, platform, time.Now().Format("15:04"))
+func notifyOnlineStatus(webhookURL, status, userName string) {
+	msg := fmt.Sprintf("%s\n%s\n%s", status, userName, time.Now().Format("15:04"))
 
-	log.Printf("[STATUS] %s user=%s platform=%s\n", status, userID, platform)
+	log.Printf("[STATUS] %s user=%s\n", status, userName)
 	notifyDiscord(webhookURL, msg)
 }
 
-func notifyWorldMove(webhookURL, userID, worldName, location, travelingToLocation, worldID string) {
+func notifyWorldMove(webhookURL, userName, worldName string) {
 	destination := worldName
-
-	if destination == "" && travelingToLocation != "" {
-		destination = travelingToLocation
-	}
-
-	if destination == "" && location != "" {
-		destination = location
-	}
-
-	if destination == "" && worldID != "" {
-		destination = worldID
-	}
 
 	if destination == "" {
 		destination = "unknown"
 	}
 
-	msg := fmt.Sprintf("MOVE\n%s\n%s\n%s", userID, destination, time.Now().Format("15:04"))
+	msg := fmt.Sprintf("MOVE\n%s\n%s\n%s", userName, destination, time.Now().Format("15:04"))
 
-	log.Printf("[WORLD MOVE] user=%s destination=%s location=%s worldId=%s\n", userID, destination, location, worldID)
+	log.Printf("[WORLD MOVE] user=%s destination=%s\n", userName, destination)
 	notifyDiscord(webhookURL, msg)
 }
 
@@ -386,7 +374,7 @@ func main() {
 
 				if isTargetFriend(v.UserID) {
 					displayName := getDisplayName(v.UserID)
-					notifyOnlineStatus(discordWebhook, "ONLINE", displayName, v.Platform)
+					notifyOnlineStatus(discordWebhook, "ONLINE", displayName)
 				}
 
 			case "friend-offline":
@@ -398,7 +386,7 @@ func main() {
 
 				if isTargetFriend(v.UserID) {
 					displayName := getDisplayName(v.UserID)
-					notifyOnlineStatus(discordWebhook, "OFFLINE", displayName, v.Platform)
+					notifyOnlineStatus(discordWebhook, "OFFLINE", displayName)
 				}
 
 			case "friend-location":
@@ -417,9 +405,6 @@ func main() {
 						discordWebhook,
 						displayName,
 						name,
-						v.Location,
-						v.TravelingToLocation,
-						v.WorldID,
 					)
 				}
 			}
