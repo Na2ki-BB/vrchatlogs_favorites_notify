@@ -7,11 +7,15 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
 )
+
+const userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36"
 
 type envelope struct {
 	Type    string          `json:"type"`
@@ -36,6 +40,13 @@ type FriendLocation struct {
 	TravelingToLocation string `json:"travelingToLocation"`
 	WorldID             string `json:"worldId"`
 	CanRequestInvite    bool   `json:"canRequestInvite"`
+}
+
+type Favorite struct {
+	FavoriteID string   `json:"favoriteId"`
+	ID         string   `json:"id"`
+	Tags       []string `json:"tags"`
+	Type       string   `json:"type"`
 }
 
 func notifyDiscord(webhookURL, msg string) {
@@ -68,10 +79,66 @@ func notifyDiscord(webhookURL, msg string) {
 	}
 	defer res.Body.Close()
 
-	if res.StatusCode < 200 || res.StatusCode >=  300 {
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
 		body, _ := io.ReadAll(res.Body)
 		log.Printf("discord non-2xx: %d body=%s\n", res.StatusCode, string(body))
 	}
+}
+
+func fetchFavoriteFriendIDs(token, tag string) (map[string]bool, error) {
+	params := url.Values{}
+	params.Set("type", "friend")
+	params.Set("tag", tag)
+	params.Set("n", "100")
+
+	apiURL := "https://api.vrchat.cloud/api/1/favorites?" + params.Encode()
+
+	req, err := http.NewRequest("GET", apiURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("favorites req error: %w", err)
+	}
+
+	req.Header.Set("User-Agent", userAgent)
+	req.AddCookie(&http.Cookie{
+		Name:  "auth",
+		Value: token,
+	})
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	res, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("favorites res error: %w", err)
+	}
+	defer res.Body.Close()
+
+	body, err := io.ReadAll(res.Body)
+	if err != nil {
+		return nil, fmt.Errorf("favorites read error: %w", err)
+	}
+
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		return nil, fmt.Errorf("favorites non-2xx: %d body=%s", res.StatusCode, string(body))
+	}
+
+	var favorites []Favorite
+	if err := json.Unmarshal(body, &favorites); err != nil {
+		return nil, fmt.Errorf("favorites unmarshal error: %w", err)
+	}
+
+	targets := map[string]bool{}
+
+	for _, fav := range favorites {
+		if fav.Type != "friend" {
+			continue
+		}
+		if fav.FavoriteID == "" {
+			continue
+		}
+
+		targets[fav.FavoriteID] = true
+	}
+
+	return targets, nil
 }
 
 func getWorldName(token, worldID string) string {
@@ -85,7 +152,7 @@ func getWorldName(token, worldID string) string {
 		log.Println("worldName req error:", err)
 		return ""
 	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/")
+	req.Header.Set("User-Agent", userAgent)
 	req.AddCookie(&http.Cookie{
 		Name:  "auth",
 		Value: token,
@@ -104,6 +171,12 @@ func getWorldName(token, worldID string) string {
 		log.Println("worldName read error:", err)
 		return ""
 	}
+
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		log.Printf("worldName non-2xx: %d body=%s\n", res.StatusCode, string(body))
+		return ""
+	}
+
 	var parsed struct {
 		Name string `json:"name"`
 	}
@@ -115,22 +188,60 @@ func getWorldName(token, worldID string) string {
 }
 
 func main() {
-	targetUserID := os.Getenv("VRC_TARGET_USERID")
-	if targetUserID == "" {
-		log.Fatal("VRC_TARGET_USERID not found")
-	}
 	token := os.Getenv("VRC_AUTH_TOKEN")
 	if token == "" {
 		log.Fatal("VRC_AUTH_TOKEN not found")
 	}
-	url := "wss://pipeline.vrchat.cloud/?authToken=" + token
+
+	favoriteTag := os.Getenv("VRC_NOTIFY_FAVORITE_TAG")
+	if favoriteTag == "" {
+		favoriteTag = "group_0"
+	}
+
 	discordWebhook := os.Getenv("DISCORD_WEBHOOK_URL")
 
+	var targetMu sync.RWMutex
+	targetFriendIDs := map[string]bool{}
+
+	refreshTargets := func() {
+		targets, err := fetchFavoriteFriendIDs(token, favoriteTag)
+		if err != nil {
+			log.Println("favorite refresh error:", err)
+			return
+		}
+
+		targetMu.Lock()
+		targetFriendIDs = targets
+		targetMu.Unlock()
+
+		log.Printf("favorite targets refreshed: tag=%s count=%d\n", favoriteTag, len(targets))
+	}
+
+	isTargetFriend := func(userID string) bool {
+		targetMu.RLock()
+		defer targetMu.RUnlock()
+
+		return targetFriendIDs[userID]
+	}
+
+	refreshTargets()
+
+	go func() {
+		ticker := time.NewTicker(5 * time.Minute)
+		defer ticker.Stop()
+
+		for range ticker.C {
+			refreshTargets()
+		}
+	}()
+
+	wsURL := "wss://pipeline.vrchat.cloud/?authToken=" + token
+
 	h := http.Header{}
-	h.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36")
+	h.Set("User-Agent", userAgent)
 
 	for {
-		conn, _, err := websocket.DefaultDialer.Dial(url, h)
+		conn, _, err := websocket.DefaultDialer.Dial(wsURL, h)
 		if err != nil {
 			log.Println("dial error:", err)
 			time.Sleep(3 * time.Second)
@@ -153,6 +264,7 @@ func main() {
 			}
 
 			content := env.Content
+
 			var s string
 			if err := json.Unmarshal(env.Content, &s); err == nil && len(s) > 0 && s[0] == '{' {
 				content = json.RawMessage(s)
@@ -165,7 +277,8 @@ func main() {
 					log.Println("friend-online unmarshal error:", err)
 					continue
 				}
-				if v.UserID == targetUserID {
+
+				if isTargetFriend(v.UserID) {
 					msg := fmt.Sprintf("[ONLINE] %s platform=%s location=%s", v.UserID, v.Platform, v.Location)
 					log.Println(msg)
 					notifyDiscord(discordWebhook, msg)
@@ -177,7 +290,8 @@ func main() {
 					log.Println("friend-offline unmarshal error:", err)
 					continue
 				}
-				if v.UserID == targetUserID {
+
+				if isTargetFriend(v.UserID) {
 					msg := fmt.Sprintf("[OFFLINE] %s", v.UserID)
 					log.Println(msg)
 					notifyDiscord(discordWebhook, msg)
@@ -189,8 +303,10 @@ func main() {
 					log.Println("friend-location unmarshal error:", err)
 					continue
 				}
-				if v.UserID == targetUserID {
+
+				if isTargetFriend(v.UserID) {
 					name := getWorldName(token, v.WorldID)
+
 					if v.Location == "traveling" && v.TravelingToLocation != "" {
 						if name != "" {
 							msg := fmt.Sprintf("[MOVE] %s traveling→ %s", v.UserID, name)
@@ -215,9 +331,9 @@ func main() {
 				}
 			}
 		}
+
 		_ = conn.Close()
 		time.Sleep(2 * time.Second)
 		log.Println("Reconnecting...")
 	}
 }
-
