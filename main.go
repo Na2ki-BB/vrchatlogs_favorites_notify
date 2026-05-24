@@ -175,7 +175,51 @@ func fetchFavoriteFriendIDs(token, twoFactorToken, tag string) (map[string]bool,
 
 	return targets, nil
 }
+func getUserDisplayName(token, userID string) string {
+	apiURL := "https://api.vrchat.cloud/api/1/users/" + userID
 
+	req, err := http.NewRequest("GET", apiURL, nil)
+	if err != nil {
+		log.Println("userName req error:", err)
+		return ""
+	}
+
+	req.Header.Set("User-Agent", userAgent)
+	req.AddCookie(&http.Cookie{
+		Name:  "auth",
+		Value: token,
+	})
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	res, err := client.Do(req)
+	if err != nil {
+		log.Println("userName res error:", err)
+		return ""
+	}
+	defer res.Body.Close()
+
+	body, err := io.ReadAll(res.Body)
+	if err != nil {
+		log.Println("userName read error:", err)
+		return ""
+	}
+
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		log.Printf("userName non-2xx: %d body=%s\n", res.StatusCode, string(body))
+		return ""
+	}
+
+	var parsed struct {
+		DisplayName string `json:"displayName"`
+	}
+
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		log.Println("userName unmarshal error:", err)
+		return ""
+	}
+
+	return parsed.DisplayName
+}
 func getWorldName(token, worldID string) string {
 	if worldID == "private" {
 		return "private"
@@ -240,6 +284,7 @@ func main() {
 
 	var targetMu sync.RWMutex
 	targetFriendIDs := map[string]bool{}
+	userNameMap := map[string]string{}
 
 	refreshTargets := func() {
 		targets, err := fetchFavoriteFriendIDs(token, twoFactorToken, favoriteTag)
@@ -248,8 +293,20 @@ func main() {
 			return
 		}
 
+		newUserNameMap := map[string]string{}
+
+		for userID := range targets {
+			displayName := getUserDisplayName(token, userID)
+			if displayName == "" {
+				displayName = userID
+			}
+
+			newUserNameMap[userID] = displayName
+		}
+
 		targetMu.Lock()
 		targetFriendIDs = targets
+		userNameMap = newUserNameMap
 		targetMu.Unlock()
 
 		log.Printf("favorite targets refreshed: tag=%s count=%d\n", favoriteTag, len(targets))
@@ -262,6 +319,17 @@ func main() {
 		return targetFriendIDs[userID]
 	}
 
+	getDisplayName := func(userID string) string {
+		targetMu.RLock()
+		defer targetMu.RUnlock()
+
+		displayName := userNameMap[userID]
+		if displayName == "" {
+			return userID
+		}
+
+		return displayName
+	}
 	refreshTargets()
 
 	go func() {
@@ -317,7 +385,8 @@ func main() {
 				}
 
 				if isTargetFriend(v.UserID) {
-					notifyOnlineStatus(discordWebhook, "ONLINE", v.UserID, v.Platform)
+					displayName := getDisplayName(v.UserID)
+					notifyOnlineStatus(discordWebhook, "ONLINE", displayName, v.Platform)
 				}
 
 			case "friend-offline":
@@ -328,7 +397,8 @@ func main() {
 				}
 
 				if isTargetFriend(v.UserID) {
-					notifyOnlineStatus(discordWebhook, "OFFLINE", v.UserID, v.Platform)
+					displayName := getDisplayName(v.UserID)
+					notifyOnlineStatus(discordWebhook, "OFFLINE", displayName, v.Platform)
 				}
 
 			case "friend-location":
@@ -341,9 +411,11 @@ func main() {
 				if isTargetFriend(v.UserID) {
 					name := getWorldName(token, v.WorldID)
 
+					displayName := getDisplayName(v.UserID)
+
 					notifyWorldMove(
 						discordWebhook,
-						v.UserID,
+						displayName,
 						name,
 						v.Location,
 						v.TravelingToLocation,
