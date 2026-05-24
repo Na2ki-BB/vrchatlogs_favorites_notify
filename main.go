@@ -85,7 +85,7 @@ func notifyDiscord(webhookURL, msg string) {
 	}
 }
 
-func fetchFavoriteFriendIDs(token, tag string) (map[string]bool, error) {
+func fetchFavoriteFriendIDs(token, twoFactorToken, tag string) (map[string]bool, error) {
 	params := url.Values{}
 	params.Set("type", "friend")
 	params.Set("tag", tag)
@@ -102,6 +102,10 @@ func fetchFavoriteFriendIDs(token, tag string) (map[string]bool, error) {
 	req.AddCookie(&http.Cookie{
 		Name:  "auth",
 		Value: token,
+	})
+	req.AddCookie(&http.Cookie{
+		Name:  "twoFactorAuth",
+		Value: twoFactorToken,
 	})
 
 	client := &http.Client{Timeout: 10 * time.Second}
@@ -192,7 +196,10 @@ func main() {
 	if token == "" {
 		log.Fatal("VRC_AUTH_TOKEN not found")
 	}
-
+	twoFactorToken := os.Getenv("VRC_TWO_FACTOR_AUTH_TOKEN")
+	if twoFactorToken == "" {
+		log.Fatal("VRC_TWO_FACTOR_AUTH_TOKEN not found")
+	}
 	favoriteTag := os.Getenv("VRC_NOTIFY_FAVORITE_TAG")
 	if favoriteTag == "" {
 		favoriteTag = "group_0"
@@ -204,7 +211,7 @@ func main() {
 	targetFriendIDs := map[string]bool{}
 
 	refreshTargets := func() {
-		targets, err := fetchFavoriteFriendIDs(token, favoriteTag)
+		targets, err := fetchFavoriteFriendIDs(token, twoFactorToken, favoriteTag)
 		if err != nil {
 			log.Println("favorite refresh error:", err)
 			return
