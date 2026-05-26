@@ -343,6 +343,10 @@ func isSoundEnabled() bool {
 	return soundPin.Read() == gpio.Low
 }
 
+func clearOLED() {
+	showOLED("", "", "", "")
+}
+
 func main() {
 	token := os.Getenv("VRC_AUTH_TOKEN")
 	if token == "" {
@@ -414,8 +418,26 @@ func main() {
 	}
 	refreshTargets()
 
+	go func() {
+		lastDisplayEnabled := isDisplayEnabled()
+
+		for {
+			current := isDisplayEnabled()
+
+			if lastDisplayEnabled && !current {
+				clearOLED()
+				log.Println("display disabled: OLED cleared")
+			}
+
+			lastDisplayEnabled = current
+			time.Sleep(300 * time.Millisecond)
+		}
+	}()
+
 	if isDisplayEnabled() {
 		showOLED("TEST", "Sound", time.Now().Format("15:04"), "")
+	} else {
+		clearOLED()
 	}
 
 	if isSoundEnabled() {
