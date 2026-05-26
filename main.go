@@ -14,9 +14,15 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"periph.io/x/conn/v3/gpio"
+	"periph.io/x/conn/v3/gpio/gpioreg"
+	"periph.io/x/host/v3"
 )
 
 const userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36"
+
+var displayPin gpio.PinIO
+var soundPin gpio.PinIO
 
 type envelope struct {
 	Type    string          `json:"type"`
@@ -93,8 +99,13 @@ func notifyOnlineStatus(webhookURL, status, userName string) {
 	log.Printf("[STATUS] %s user=%s\n", status, userName)
 	notifyDiscord(webhookURL, msg)
 
-	showOLED(status, userName, now, "")
-	playSound()
+	if isDisplayEnabled() {
+		showOLED(status, userName, now, "")
+	}
+
+	if isSoundEnabled() {
+		playSound()
+	}
 }
 
 func notifyWorldMove(webhookURL, userName, worldName string) {
@@ -110,8 +121,13 @@ func notifyWorldMove(webhookURL, userName, worldName string) {
 	log.Printf("[WORLD MOVE] user=%s destination=%s\n", userName, destination)
 	notifyDiscord(webhookURL, msg)
 
-	showOLED("MOVE", userName, destination, now)
-	playSound()
+	if isDisplayEnabled() {
+		showOLED("MOVE", userName, destination, now)
+	}
+
+	if isSoundEnabled() {
+		playSound()
+	}
 }
 
 func fetchFavoriteFriendIDs(token, twoFactorToken, tag string) (map[string]bool, error) {
@@ -285,6 +301,48 @@ func playSound() {
 	}
 }
 
+func initGPIO() error {
+	if _, err := host.Init(); err != nil {
+		return err
+	}
+
+	displayPin = gpioreg.ByName("GPIO17")
+	if displayPin == nil {
+		return fmt.Errorf("GPIO17 not found")
+	}
+
+	soundPin = gpioreg.ByName("GPIO27")
+	if soundPin == nil {
+		return fmt.Errorf("GPIO27 not found")
+	}
+
+	if err := displayPin.In(gpio.PullUp, gpio.NoEdge); err != nil {
+		return fmt.Errorf("GPIO17 input error: %w", err)
+	}
+
+	if err := soundPin.In(gpio.PullUp, gpio.NoEdge); err != nil {
+		return fmt.Errorf("GPIO27 input error: %w", err)
+	}
+
+	return nil
+}
+
+func isDisplayEnabled() bool {
+	if displayPin == nil {
+		return true
+	}
+
+	return displayPin.Read() == gpio.Low
+}
+
+func isSoundEnabled() bool {
+	if soundPin == nil {
+		return true
+	}
+
+	return soundPin.Read() == gpio.Low
+}
+
 func main() {
 	token := os.Getenv("VRC_AUTH_TOKEN")
 	if token == "" {
@@ -301,6 +359,11 @@ func main() {
 
 	discordWebhook := os.Getenv("DISCORD_WEBHOOK_URL_FAVORITES")
 
+	if err := initGPIO(); err != nil {
+		log.Fatal("gpio init error:", err)
+	}
+
+	log.Printf("switch initial state: display=%v sound=%v\n", isDisplayEnabled(), isSoundEnabled())
 	var targetMu sync.RWMutex
 	targetFriendIDs := map[string]bool{}
 	userNameMap := map[string]string{}
@@ -350,8 +413,14 @@ func main() {
 		return displayName
 	}
 	refreshTargets()
-	showOLED("TEST", "Sound", time.Now().Format("15:04"), "")
-	playSound()
+
+	if isDisplayEnabled() {
+		showOLED("TEST", "Sound", time.Now().Format("15:04"), "")
+	}
+
+	if isSoundEnabled() {
+		playSound()
+	}
 
 	go func() {
 		ticker := time.NewTicker(5 * time.Minute)
