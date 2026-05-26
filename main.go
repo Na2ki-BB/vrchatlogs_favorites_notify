@@ -23,6 +23,8 @@ const userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 
 
 var displayPin gpio.PinIO
 var soundPin gpio.PinIO
+var oledMu sync.Mutex
+var latestOLEDLines = [4]string{"VRChat Notify", "Waiting...", "", ""}
 
 type envelope struct {
 	Type    string          `json:"type"`
@@ -99,9 +101,7 @@ func notifyOnlineStatus(webhookURL, status, userName string) {
 	log.Printf("[STATUS] %s user=%s\n", status, userName)
 	notifyDiscord(webhookURL, msg)
 
-	if isDisplayEnabled() {
-		showOLED(status, userName, now, "")
-	}
+	showOLED(status, userName, now, "")
 
 	if isSoundEnabled() {
 		playSound()
@@ -121,9 +121,7 @@ func notifyWorldMove(webhookURL, userName, worldName string) {
 	log.Printf("[WORLD MOVE] user=%s destination=%s\n", userName, destination)
 	notifyDiscord(webhookURL, msg)
 
-	if isDisplayEnabled() {
-		showOLED("MOVE", userName, destination, now)
-	}
+	showOLED("MOVE", userName, destination, now)
 
 	if isSoundEnabled() {
 		playSound()
@@ -280,7 +278,7 @@ func getWorldName(token, worldID string) string {
 	return parsed.Name
 }
 
-func showOLED(line1, line2, line3, line4 string) {
+func writeOLEDFile(line1, line2, line3, line4 string) {
 	if err := os.MkdirAll("runtime", 0755); err != nil {
 		log.Println("oled mkdir error:", err)
 		return
@@ -293,6 +291,27 @@ func showOLED(line1, line2, line3, line4 string) {
 	}
 }
 
+func showOLED(line1, line2, line3, line4 string) {
+	oledMu.Lock()
+	latestOLEDLines = [4]string{line1, line2, line3, line4}
+	oledMu.Unlock()
+
+	if isDisplayEnabled() {
+		writeOLEDFile(line1, line2, line3, line4)
+	}
+}
+
+func restoreOLED() {
+	oledMu.Lock()
+	lines := latestOLEDLines
+	oledMu.Unlock()
+
+	writeOLEDFile(lines[0], lines[1], lines[2], lines[3])
+}
+
+func clearOLED() {
+	writeOLEDFile("", "", "", "")
+}
 func playSound() {
 	cmd := exec.Command("aplay", "/home/satomi/notify.wav")
 
@@ -427,6 +446,11 @@ func main() {
 			if lastDisplayEnabled && !current {
 				clearOLED()
 				log.Println("display disabled: OLED cleared")
+			}
+
+			if !lastDisplayEnabled && current {
+				restoreOLED()
+				log.Println("display enabled: OLED restored")
 			}
 
 			lastDisplayEnabled = current
