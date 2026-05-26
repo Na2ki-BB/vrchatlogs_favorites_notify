@@ -3,9 +3,15 @@ import time
 from luma.core.interface.serial import i2c
 from luma.core.render import canvas
 from luma.oled.device import ssd1306
+from PIL import ImageFont
 
 serial = i2c(port=1, address=0x3C)
 device = ssd1306(serial, width=128, height=64)
+
+font_path = "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"
+
+# 128x64 OLEDなので、大きすぎると入らない
+font = ImageFont.truetype(font_path, 12)
 
 line1 = sys.argv[1] if len(sys.argv) > 1 else ""
 line2 = sys.argv[2] if len(sys.argv) > 2 else ""
@@ -18,9 +24,9 @@ print("line3 =", line3)
 print("line4 =", line4)
 
 with canvas(device) as draw:
-    draw.text((0, 0), line1, fill="white")
-    draw.text((0, 16), line2, fill="white")
-    draw.text((0, 32), line3, fill="white")
-    draw.text((0, 48), line4, fill="white")
+    draw.text((0, 0), line1, font=font, fill="white")
+    draw.text((0, 16), line2, font=font, fill="white")
+    draw.text((0, 32), line3, font=font, fill="white")
+    draw.text((0, 48), line4, font=font, fill="white")
 
 time.sleep(10)
