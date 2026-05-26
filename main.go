@@ -287,7 +287,7 @@ func main() {
 		favoriteTag = "group_0"
 	}
 
-	discordWebhook := os.Getenv("DISCORD_WEBHOOK_URL")
+	discordWebhook := os.Getenv("DISCORD_WEBHOOK_URL_FAVORITES")
 
 	var targetMu sync.RWMutex
 	targetFriendIDs := map[string]bool{}
