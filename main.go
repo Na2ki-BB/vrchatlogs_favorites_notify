@@ -350,6 +350,8 @@ func main() {
 		return displayName
 	}
 	refreshTargets()
+	showOLED("TEST", "Sound", time.Now().Format("15:04"), "")
+	playSound()
 
 	go func() {
 		ticker := time.NewTicker(5 * time.Minute)
