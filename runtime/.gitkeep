@@ -1,0 +1,4 @@
+.env
+runtime/*.txt
+*.log
+vrchatlogs_favorites_notify

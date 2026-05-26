@@ -5,7 +5,9 @@ from luma.core.render import canvas
 from luma.oled.device import ssd1306
 from PIL import ImageFont
 
-DISPLAY_FILE = "/tmp/vrchat_oled.txt"
+DISPLAY_FILE = "runtime/oled_status.txt"
+
+os.makedirs("runtime", exist_ok=True)
 
 serial = i2c(port=1, address=0x3C)
 device = ssd1306(serial, width=128, height=64)
@@ -35,7 +37,6 @@ def show(lines):
         draw.text((0, 48), lines[3], font=font, fill="white")
 
 print("OLED daemon started.")
-
 show(["VRChat Notify", "Waiting...", "", ""])
 
 while True:
