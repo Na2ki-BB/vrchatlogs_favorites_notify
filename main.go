@@ -85,10 +85,13 @@ func notifyDiscord(webhookURL, msg string) {
 	}
 }
 func notifyOnlineStatus(webhookURL, status, userName string) {
-	msg := fmt.Sprintf("%s\n%s\n%s", status, userName, time.Now().Format("15:04"))
+	now := time.Now().Format("15:04")
+	msg := fmt.Sprintf("%s\n%s\n%s", status, userName, now)
 
 	log.Printf("[STATUS] %s user=%s\n", status, userName)
 	notifyDiscord(webhookURL, msg)
+
+	showOLED(status, userName, now, "")
 }
 
 func notifyWorldMove(webhookURL, userName, worldName string) {
@@ -98,10 +101,13 @@ func notifyWorldMove(webhookURL, userName, worldName string) {
 		destination = "unknown"
 	}
 
-	msg := fmt.Sprintf("MOVE\n%s\n%s\n%s", userName, destination, time.Now().Format("15:04"))
+	now := time.Now().Format("15:04")
+	msg := fmt.Sprintf("MOVE\n%s\n%s\n%s", userName, destination, now)
 
 	log.Printf("[WORLD MOVE] user=%s destination=%s\n", userName, destination)
 	notifyDiscord(webhookURL, msg)
+
+	showOLED("MOVE", userName, destination, now)
 }
 
 func fetchFavoriteFriendIDs(token, twoFactorToken, tag string) (map[string]bool, error) {
@@ -252,6 +258,19 @@ func getWorldName(token, worldID string) string {
 		return ""
 	}
 	return parsed.Name
+}
+
+func showOLED(line1, line2, line3, line4 string) {
+	if err := os.MkdirAll("runtime", 0755); err != nil {
+		log.Println("oled mkdir error:", err)
+		return
+	}
+
+	content := fmt.Sprintf("%s\n%s\n%s\n%s\n", line1, line2, line3, line4)
+
+	if err := os.WriteFile("runtime/oled_status.txt", []byte(content), 0644); err != nil {
+		log.Println("oled write error:", err)
+	}
 }
 
 func main() {
