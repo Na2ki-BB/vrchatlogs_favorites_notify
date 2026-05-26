@@ -454,6 +454,22 @@ func main() {
 		}
 	}()
 
+	go func() {
+		lastSoundEnabled := isSoundEnabled()
+
+		for {
+			current := isSoundEnabled()
+
+			if !lastSoundEnabled && current {
+				playSound()
+				log.Println("sound enabled: test sound played")
+			}
+
+			lastSoundEnabled = current
+			time.Sleep(300 * time.Millisecond)
+		}
+	}()
+
 	if isDisplayEnabled() {
 		showOLED("TEST", "Sound", time.Now().Format("15:04"), "")
 	} else {
