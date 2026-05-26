@@ -362,10 +362,6 @@ func isSoundEnabled() bool {
 	return soundPin.Read() == gpio.Low
 }
 
-func clearOLED() {
-	showOLED("", "", "", "")
-}
-
 func main() {
 	token := os.Getenv("VRC_AUTH_TOKEN")
 	if token == "" {
