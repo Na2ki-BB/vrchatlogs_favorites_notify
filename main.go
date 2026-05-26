@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"sync"
 	"time"
 
@@ -84,6 +85,7 @@ func notifyDiscord(webhookURL, msg string) {
 		log.Printf("discord non-2xx: %d body=%s\n", res.StatusCode, string(body))
 	}
 }
+
 func notifyOnlineStatus(webhookURL, status, userName string) {
 	now := time.Now().Format("15:04")
 	msg := fmt.Sprintf("%s\n%s\n%s", status, userName, now)
@@ -92,6 +94,7 @@ func notifyOnlineStatus(webhookURL, status, userName string) {
 	notifyDiscord(webhookURL, msg)
 
 	showOLED(status, userName, now, "")
+	playSound()
 }
 
 func notifyWorldMove(webhookURL, userName, worldName string) {
@@ -108,6 +111,7 @@ func notifyWorldMove(webhookURL, userName, worldName string) {
 	notifyDiscord(webhookURL, msg)
 
 	showOLED("MOVE", userName, destination, now)
+	playSound()
 }
 
 func fetchFavoriteFriendIDs(token, twoFactorToken, tag string) (map[string]bool, error) {
@@ -270,6 +274,14 @@ func showOLED(line1, line2, line3, line4 string) {
 
 	if err := os.WriteFile("runtime/oled_status.txt", []byte(content), 0644); err != nil {
 		log.Println("oled write error:", err)
+	}
+}
+
+func playSound() {
+	cmd := exec.Command("aplay", "/home/satomi/notify.wav")
+
+	if err := cmd.Start(); err != nil {
+		log.Println("sound play error:", err)
 	}
 }
 
