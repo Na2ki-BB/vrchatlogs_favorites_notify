@@ -470,9 +470,9 @@ func main() {
 		}
 	}()
 
-	if isDisplayEnabled() {
-		showOLED("TEST", "Sound", time.Now().Format("15:04"), "")
-	} else {
+	showOLED("VRChat Notify", "Waiting...", time.Now().Format("15:04"), "")
+
+	if !isDisplayEnabled() {
 		clearOLED()
 	}
 
