@@ -313,11 +313,13 @@ func clearOLED() {
 	writeOLEDFile("", "", "", "")
 }
 func playSound() {
-	cmd := exec.Command("aplay", "/home/satomi/notify.wav")
+	go func() {
+		cmd := exec.Command("aplay", "/home/satomi/notify.wav")
 
-	if err := cmd.Start(); err != nil {
-		log.Println("sound play error:", err)
-	}
+		if err := cmd.Run(); err != nil {
+			log.Println("sound play error:", err)
+		}
+	}()
 }
 
 func initGPIO() error {
