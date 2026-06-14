@@ -25,6 +25,7 @@ var displayPin gpio.PinIO
 var soundPin gpio.PinIO
 var oledMu sync.Mutex
 var latestOLEDLines = [4]string{"VRChat Notify", "Waiting...", "", ""}
+var hubDataDir string
 
 type envelope struct {
 	Type    string          `json:"type"`
@@ -291,6 +292,35 @@ func writeOLEDFile(line1, line2, line3, line4 string) {
 	}
 }
 
+func writeHubJSON(line1, line2, line3, line4 string) {
+	if hubDataDir == "" {
+		return
+	}
+
+	data := map[string]interface{}{
+		"updated_at": time.Now().Format("2006-01-02T15:04:05"),
+		"lines":      []string{line1, line2, line3, line4},
+	}
+
+	b, err := json.Marshal(data)
+	if err != nil {
+		log.Println("hub json marshal error:", err)
+		return
+	}
+
+	tmp := hubDataDir + "/vrchat.json.tmp"
+	dst := hubDataDir + "/vrchat.json"
+
+	if err := os.WriteFile(tmp, b, 0644); err != nil {
+		log.Println("hub json write error:", err)
+		return
+	}
+
+	if err := os.Rename(tmp, dst); err != nil {
+		log.Println("hub json rename error:", err)
+	}
+}
+
 func showOLED(line1, line2, line3, line4 string) {
 	oledMu.Lock()
 	latestOLEDLines = [4]string{line1, line2, line3, line4}
@@ -299,6 +329,8 @@ func showOLED(line1, line2, line3, line4 string) {
 	if isDisplayEnabled() {
 		writeOLEDFile(line1, line2, line3, line4)
 	}
+
+	writeHubJSON(line1, line2, line3, line4)
 }
 
 func restoreOLED() {
@@ -378,6 +410,7 @@ func main() {
 		favoriteTag = "group_0"
 	}
 
+	hubDataDir = os.Getenv("HUB_DATA_DIR")
 	discordWebhook := os.Getenv("DISCORD_WEBHOOK_URL_FAVORITES")
 
 	if err := initGPIO(); err != nil {

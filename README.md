@@ -175,6 +175,12 @@ DISCORD_WEBHOOK_URL_FAVORITES=https://discord.com/api/webhooks/...
   * Discord Webhook URL
   * 空の場合、Discord通知は無効になります。
 
+* `HUB_DATA_DIR`
+
+  * [raspi-esp32-status-panel](https://github.com/na2ki/raspi-esp32-status-panel) との連携用のJSONデータを書き込むディレクトリパス
+  * 空の場合、ハブ連携は無効になり、動作はそのままです
+  * 例: `/home/na2ki/raspi-esp32-status-panel/hub/data`
+
 環境変数ファイルを作成します。
 
 ```bash

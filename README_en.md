@@ -175,6 +175,12 @@ Optional:
   * Discord webhook URL
   * If empty, Discord notifications are disabled
 
+* `HUB_DATA_DIR`
+
+  * Directory path to write hub JSON data for [raspi-esp32-status-panel](https://github.com/na2ki/raspi-esp32-status-panel) integration
+  * If empty, hub integration is disabled and behavior is unchanged
+  * Example: `/home/na2ki/raspi-esp32-status-panel/hub/data`
+
 Create environment file:
 
 ```bash
