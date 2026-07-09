@@ -40,16 +40,49 @@ void setLed(bool on) {
   digitalWrite(PIN_LED, (on == LED_ACTIVE_LOW) ? LOW : HIGH);
 }
 
+// scanNetworks lists the 2.4GHz networks this ESP32 can actually see. If your
+// target SSID is NOT in this list, it is either 5GHz (ESP32-C3 cannot use it)
+// or out of range - not a password problem.
+void scanNetworks() {
+  Serial.println("--- 2.4GHz networks visible to this ESP32 ---");
+  int n = WiFi.scanNetworks();
+  if (n <= 0) {
+    Serial.println("  (none found)");
+  }
+  for (int i = 0; i < n; i++) {
+    Serial.printf("  \"%s\"  RSSI=%d  ch=%d  %s\n",
+                  WiFi.SSID(i).c_str(), WiFi.RSSI(i), WiFi.channel(i),
+                  (WiFi.encryptionType(i) == WIFI_AUTH_OPEN) ? "open" : "secured");
+  }
+  WiFi.scanDelete();
+  Serial.println("--------------------------------------------");
+}
+
 void connectWiFi() {
   WiFi.mode(WIFI_STA);
+  WiFi.disconnect(true);
+  delay(100);
+
+  scanNetworks();
+
+  Serial.printf("connecting to SSID: \"%s\"\n", WIFI_SSID);
   WiFi.begin(WIFI_SSID, WIFI_PASS);
-  Serial.print("connecting wifi");
+
+  unsigned long start = millis();
   while (WiFi.status() != WL_CONNECTED) {
-    delay(300);
-    Serial.print(".");
-    setLed(!digitalRead(PIN_LED)); // blink while connecting
+    delay(500);
+    Serial.printf("  status=%d\n", WiFi.status()); // 1=SSID not found, 4=wrong password, 6=disconnected, 3=connected
+    setLed(!digitalRead(PIN_LED));                 // blink while connecting
+    if (millis() - start > 20000) {                // give up after 20s, then retry
+      Serial.println("timeout - re-scanning and retrying...");
+      scanNetworks();
+      WiFi.disconnect(true);
+      delay(100);
+      WiFi.begin(WIFI_SSID, WIFI_PASS);
+      start = millis();
+    }
   }
-  Serial.printf("\nconnected: %s\n", WiFi.localIP().toString().c_str());
+  Serial.printf("connected: %s\n", WiFi.localIP().toString().c_str());
 }
 
 // request hits the given path and returns the reported enabled state.
