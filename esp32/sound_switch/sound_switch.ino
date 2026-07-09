@@ -23,16 +23,11 @@
 #include <WiFi.h>
 #include <HTTPClient.h>
 
-// ---- user config ----------------------------------------------------------
-static const char *WIFI_SSID = "YOUR_WIFI_SSID";
-static const char *WIFI_PASS = "YOUR_WIFI_PASSWORD";
+// Wi-Fi + Raspberry Pi config lives in secrets.h (gitignored). Copy
+// secrets.h.example to secrets.h and fill in your real values.
+#include "secrets.h"  // WIFI_SSID / WIFI_PASS / PI_HOST / PI_PORT
 
-// Raspberry Pi address + SOUND_API_ADDR port (default 8099). A DHCP
-// reservation / static IP for the Pi keeps this stable.
-static const char *PI_HOST = "192.168.0.10";
-static const int   PI_PORT = 8099;
-// ---------------------------------------------------------------------------
-
+// ---- pins -----------------------------------------------------------------
 static const int PIN_BUTTON = 4;   // external tact switch to GND
 static const int PIN_LED    = 8;   // onboard LED (status)
 static const bool LED_ACTIVE_LOW = true;

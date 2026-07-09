@@ -102,14 +102,22 @@ go mod tidy
 * ボードマネージャに「esp32」（Espressif Systems）を追加
 * ボード選択: `ESP32C3 Dev Module`
 
-`esp32/sound_switch/sound_switch.ino` の先頭を編集します。
+Wi-Fi等の設定は `esp32/sound_switch/secrets.h`（**Git管理外**）に書きます。テンプレートをコピーして編集してください。
+
+```bash
+cd esp32/sound_switch
+cp secrets.h.example secrets.h
+```
 
 ```cpp
-static const char *WIFI_SSID = "YOUR_WIFI_SSID";
-static const char *WIFI_PASS = "YOUR_WIFI_PASSWORD";
-static const char *PI_HOST   = "192.168.0.10";  // Raspberry Pi のIP
-static const int   PI_PORT   = 8099;            // SOUND_API_ADDR のポート
+// secrets.h
+#define WIFI_SSID "YOUR_WIFI_SSID"      // 2.4GHz帯のSSID（C3は5GHz非対応）
+#define WIFI_PASS "YOUR_WIFI_PASSWORD"
+#define PI_HOST   "192.168.0.10"        // Raspberry Pi のIP
+#define PI_PORT   8099                  // SOUND_API_ADDR のポート
 ```
+
+> `secrets.h` は `.gitignore` 済みなので、Wi‑Fiパスワードが誤ってコミット・公開されることはありません。`sound_switch.ino` はこの `secrets.h` を `#include` します。
 
 書き込み後、タクトスイッチを押すと通知音がトグルします。オンボードLEDが現在の状態を表示します。
 

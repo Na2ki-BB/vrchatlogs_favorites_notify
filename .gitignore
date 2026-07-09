@@ -1,10 +1,12 @@
 # secrets
 .env
 *.env
+esp32/sound_switch/secrets.h
 
 # build
 vrchat-notify
 VRCwebsocket
+vrchatlogs_favorites_notify
 bin/
 dist/
 

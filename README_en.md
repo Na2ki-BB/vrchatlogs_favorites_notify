@@ -102,14 +102,22 @@ go mod tidy
 * Add "esp32" (Espressif Systems) via Boards Manager
 * Board: `ESP32C3 Dev Module`
 
-Edit the top of `esp32/sound_switch/sound_switch.ino`:
+Put Wi-Fi/host config in `esp32/sound_switch/secrets.h` (**gitignored**). Copy the template and edit it:
+
+```bash
+cd esp32/sound_switch
+cp secrets.h.example secrets.h
+```
 
 ```cpp
-static const char *WIFI_SSID = "YOUR_WIFI_SSID";
-static const char *WIFI_PASS = "YOUR_WIFI_PASSWORD";
-static const char *PI_HOST   = "192.168.0.10";  // Raspberry Pi IP
-static const int   PI_PORT   = 8099;            // SOUND_API_ADDR port
+// secrets.h
+#define WIFI_SSID "YOUR_WIFI_SSID"      // 2.4GHz SSID (ESP32-C3 has no 5GHz)
+#define WIFI_PASS "YOUR_WIFI_PASSWORD"
+#define PI_HOST   "192.168.0.10"        // Raspberry Pi IP
+#define PI_PORT   8099                  // SOUND_API_ADDR port
 ```
+
+> `secrets.h` is gitignored so your Wi-Fi password is never committed. `sound_switch.ino` `#include`s it.
 
 After flashing, pressing the tact switch toggles the notification sound. The onboard LED shows the current state.
 
