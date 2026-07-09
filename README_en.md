@@ -222,7 +222,8 @@ curl -X POST http://<pi>:8099/sound/off
 
 - State is persisted to `runtime/sound_enabled` (`1` / `0`) and survives restarts.
 - If the state file is missing, the default is **ON** (so a network outage never leaves you permanently muted).
-- When switching from OFF to ON, a single confirmation test sound is played.
+- `toggle` / `on` / `off` give an **audible confirmation** of the resulting state: the notification sound plays **once for ON, twice for OFF**.
+  - This lets you tell the state by ear. To use a different sound, swap `soundFile` or change the play count.
 
 ## Runtime Files
 
@@ -388,6 +389,12 @@ journalctl -u vrchatlogs-favorites-notify.service -f
 - Press the ESP32-C3 tact switch -> toggle (LED shows current state)
 - Open `http://<pi>:8099/` in a phone / PC browser -> ON / OFF / TOGGLE
 - From any device: `curl -X POST http://<pi>:8099/sound/toggle`
+
+How to check the current state:
+
+- By ear: an action plays **1 beep for ON / 2 beeps for OFF**
+- By eye: the ESP32 onboard LED (lit = ON)
+- By command/screen: `curl http://<pi>:8099/sound` or `http://<pi>:8099/`
 
 ### Discord
 

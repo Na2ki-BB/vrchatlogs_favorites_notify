@@ -222,7 +222,8 @@ curl -X POST http://<pi>:8099/sound/off
 
 - 状態は `runtime/sound_enabled`（`1` / `0`）に永続化され、再起動後も維持されます。
 - 状態ファイルが無い場合の既定は **ON** です（ネットワーク不通時などに無音固定にならないため）。
-- OFF から ON に切り替えたときは、確認用のテスト音を1回再生します。
+- `toggle` / `on` / `off` の操作時は、結果の状態を**音で確認**できます：**ON=1回、OFF=2回**、通知音を鳴らします。
+  - 耳で判別するための仕様です。別の音にしたい場合は `soundFile` を差し替えるか、鳴らす回数を変更してください。
 
 ## Runtime Files
 
@@ -388,6 +389,12 @@ journalctl -u vrchatlogs-favorites-notify.service -f
 - ESP32-C3 のタクトスイッチを押す → トグル（LEDが現在状態を表示）
 - スマホ / PC のブラウザで `http://<pi>:8099/` を開く → ON / OFF / TOGGLE
 - 端末を問わず: `curl -X POST http://<pi>:8099/sound/toggle`
+
+現在の状態の確認方法:
+
+- 音で: 操作すると **ON=1回 / OFF=2回** 鳴ります
+- 目で: ESP32のオンボードLED（点灯=ON）
+- コマンド/画面で: `curl http://<pi>:8099/sound` または `http://<pi>:8099/`
 
 ### Discord
 

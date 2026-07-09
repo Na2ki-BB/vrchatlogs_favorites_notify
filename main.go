@@ -317,12 +317,23 @@ func writeHubJSON(line1, line2, line3, line4 string) {
 	}
 }
 
-func playSound() {
-	go func() {
-		cmd := exec.Command("aplay", "/home/satomi/notify.wav")
+const soundFile = "/home/satomi/notify.wav"
 
-		if err := cmd.Run(); err != nil {
-			log.Println("sound play error:", err)
+func playSound() {
+	playSoundTimes(1)
+}
+
+// playSoundTimes plays the notification sound n times back to back. Used for
+// notifications (once) and as audible confirmation of the sound state:
+// 1 beep = turned ON, 2 beeps = turned OFF.
+func playSoundTimes(n int) {
+	go func() {
+		for i := 0; i < n; i++ {
+			cmd := exec.Command("aplay", soundFile)
+			if err := cmd.Run(); err != nil {
+				log.Println("sound play error:", err)
+				return
+			}
 		}
 	}()
 }
@@ -417,10 +428,12 @@ func startControlServer(addr string) {
 
 	mutate := func(w http.ResponseWriter, next func(cur bool) bool) {
 		target := next(isSoundEnabled())
-		changed := setSoundEnabled(target)
-		// Play a short confirmation only when sound transitions to ON.
-		if target && changed {
-			playSound()
+		setSoundEnabled(target)
+		// Audible confirmation of the resulting state: 1 beep = ON, 2 = OFF.
+		if target {
+			playSoundTimes(1)
+		} else {
+			playSoundTimes(2)
 		}
 		writeState(w)
 	}
