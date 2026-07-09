@@ -4,8 +4,13 @@
 
 # build
 vrchat-notify
+VRCwebsocket
 bin/
 dist/
+
+# runtime state (persisted sound flag, legacy oled file, hub json)
+runtime/*
+!runtime/.gitkeep
 
 # misc
 *.log

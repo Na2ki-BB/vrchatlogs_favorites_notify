@@ -1,22 +1,27 @@
 # vrchatlogs-favorites-notify
 
-A Raspberry Pi based physical notification device for VRChat friend events.
+A Raspberry Pi based notification device for VRChat friend events.
 
 This tool listens to VRChat WebSocket events such as `friend-online`, `friend-offline`, and `friend-location`,
 filters notification targets by a VRChat favorite friend group, and sends notifications to:
 
 - Discord Webhook
-- OLED display
-- Local notification sound
+- Local notification sound (speaker / earphones)
+- OLED display (**optional / legacy**)
 
-It is designed to run on a Raspberry Pi with a small SSD1306 I2C OLED display, a speaker or earphones,
-and physical switches for display/sound control.
+Notification sound ON/OFF is controlled via a small **HTTP API** exposed by the Go process.
+Flip it from an **ESP32-C3 SuperMini + tact switch** kept at hand, or from a phone / `curl`.
 
 > **Important (Consent & Privacy)**
 > - This tool is intended to be used **only with the explicit consent** of the person being monitored/notified about.
 > - Treat any received information such as userId, displayName, location, world name, and online state as sensitive.
 > - Do not share collected or received information with third parties.
 > - Never commit or publish VRChat auth cookies, twoFactorAuth cookies, or Discord webhook URLs.
+
+> **Hardware change note (2026-07)**
+> Earlier versions supported an OLED display and GPIO physical switches (GPIO17 = display / GPIO27 = sound).
+> The OLED has been retired and the GPIO switches removed. Sound ON/OFF is now an HTTP API + ESP32 remote.
+> The OLED / Python daemon sections are kept as "optional / legacy".
 
 ## Features
 
@@ -29,50 +34,51 @@ and physical switches for display/sound control.
 - Converts `userId` to `displayName`
 - Converts `worldId` to world name when possible
 - Sends Discord notifications
-- Displays latest notification on an SSD1306 OLED
-- Supports Japanese text on OLED via Noto CJK font
 - Plays a local notification sound
-- Physical switch support:
-  - GPIO17: display ON/OFF
-  - GPIO27: sound ON/OFF
-- When display is turned OFF, OLED is cleared
-- When display is turned ON again, the latest notification is restored
-- When sound is turned ON again, a test sound is played
+- Controls sound ON/OFF via an **HTTP API** (`/sound/toggle`, etc.)
+  - Operate it from an ESP32-C3 tact switch, a phone web page, `curl`, or any device.
+  - State is persisted to `runtime/sound_enabled` and survives restarts.
+- Displays latest notification on an SSD1306 OLED (**optional / legacy**)
 - Automatically reconnects to VRChat WebSocket on disconnect
 
 ## Hardware
 
-Tested target hardware:
+### Required
 
-- Raspberry Pi 3B
-- 0.96 inch OLED
-  - 128x64
-  - I2C
-  - SSD1306
-  - Address: `0x3c`
-- Speaker or earphones
-- Physical switches
-  - Display switch: GPIO17
-  - Sound switch: GPIO27
+- Raspberry Pi (connected to your LAN)
+- Speaker or earphones (played via `aplay`)
 
-GPIO wiring example:
+### Sound remote (recommended)
+
+- ESP32-C3 SuperMini
+- One tact switch
+
+The ESP32 side is intentionally "thin" and holds no state. Pressing the switch just fires
+a single HTTP request to the Raspberry Pi; the Pi owns the authoritative state.
+To add another device/method later, just implement "send a request to the same URL".
+
+ESP32-C3 SuperMini wiring example:
+
+```text
+tact switch : one side -> GPIO4 / other side -> GND   (internal pull-up, pressed = LOW)
+onboard LED : GPIO8 (status; active LOW on most C3 SuperMini boards)
+```
+
+> GPIO8 / GPIO9 are strapping pins and GPIO20 / 21 are UART, so GPIO4 is used for the tact switch.
+> The BOOT button (GPIO9) is left free for other features. Change `PIN_BUTTON` in `sound_switch.ino` to use a different pin.
+
+### Optional / legacy (OLED)
+
+- 0.96 inch OLED (128x64 / I2C / SSD1306 / address `0x3c`)
+
+Wiring example if you use an OLED:
 
 ```text
 OLED VCC  -> Raspberry Pi 3.3V
 OLED GND  -> Raspberry Pi GND
 OLED SDA  -> GPIO2 / SDA / physical pin 3
 OLED SCL  -> GPIO3 / SCL / physical pin 5
-
-Display switch:
-  one side -> GPIO17 / physical pin 11
-  one side -> GND
-
-Sound switch:
-  one side -> GPIO27 / physical pin 13
-  one side -> GND
 ```
-
-The switches use Raspberry Pi internal pull-up resistors, so they should be connected between GPIO and GND.
 
 ## Requirements
 
@@ -80,11 +86,9 @@ The switches use Raspberry Pi internal pull-up resistors, so they should be conn
 
 * Go 1.20+ recommended
 
-Go dependencies include:
+Go dependencies:
 
 * `github.com/gorilla/websocket`
-* `periph.io/x/conn/v3`
-* `periph.io/x/host/v3`
 
 Install dependencies:
 
@@ -92,9 +96,26 @@ Install dependencies:
 go mod tidy
 ```
 
-### Python / OLED daemon
+### Arduino (ESP32-C3 remote)
 
-Required packages:
+* Arduino IDE (or arduino-cli)
+* Add "esp32" (Espressif Systems) via Boards Manager
+* Board: `ESP32C3 Dev Module`
+
+Edit the top of `esp32/sound_switch/sound_switch.ino`:
+
+```cpp
+static const char *WIFI_SSID = "YOUR_WIFI_SSID";
+static const char *WIFI_PASS = "YOUR_WIFI_PASSWORD";
+static const char *PI_HOST   = "192.168.0.10";  // Raspberry Pi IP
+static const int   PI_PORT   = 8099;            // SOUND_API_ADDR port
+```
+
+After flashing, pressing the tact switch toggles the notification sound. The onboard LED shows the current state.
+
+### Python / OLED daemon (optional / legacy)
+
+Only needed if you use an OLED.
 
 ```bash
 sudo apt update
@@ -102,34 +123,10 @@ sudo apt install -y python3-pip python3-pil i2c-tools fonts-noto-cjk fontconfig
 python3 -m pip install --break-system-packages luma.oled
 ```
 
-If your environment does not require `--break-system-packages`, this may also work:
+Enable I2C (`sudo raspi-config` -> `Interface Options` -> `I2C`), then check the address:
 
 ```bash
-python3 -m pip install luma.oled
-```
-
-Enable I2C:
-
-```bash
-sudo raspi-config
-```
-
-Then enable:
-
-```text
-Interface Options -> I2C
-```
-
-Check OLED address:
-
-```bash
-sudo i2cdetect -y 1
-```
-
-Expected result includes:
-
-```text
-3c
+sudo i2cdetect -y 1   # 3c should be visible
 ```
 
 ## Environment Variables
@@ -147,6 +144,7 @@ VRC_AUTH_TOKEN=YOUR_VRCHAT_AUTH_COOKIE
 VRC_TWO_FACTOR_AUTH_TOKEN=YOUR_VRCHAT_TWO_FACTOR_AUTH_COOKIE
 VRC_NOTIFY_FAVORITE_TAG=group_0
 DISCORD_WEBHOOK_URL_FAVORITES=https://discord.com/api/webhooks/...
+SOUND_API_ADDR=:8099
 ```
 
 ### Variables
@@ -175,6 +173,13 @@ Optional:
   * Discord webhook URL
   * If empty, Discord notifications are disabled
 
+* `SOUND_API_ADDR`
+
+  * Listen address for the sound ON/OFF control API
+  * Default: `:8099` (all interfaces)
+  * Example: `0.0.0.0:8099`, `192.168.0.10:8099`
+  * Make sure it is reachable from the ESP32 / phone over the LAN (allow it in your firewall).
+
 * `HUB_DATA_DIR`
 
   * Directory path to write hub JSON data for [raspi-esp32-status-panel](https://github.com/na2ki/raspi-esp32-status-panel) integration
@@ -194,38 +199,63 @@ sudo chown root:root /etc/vrchat-logger.env
 sudo chmod 600 /etc/vrchat-logger.env
 ```
 
-## Runtime Files
+## Sound Control API
 
-The Go process writes OLED display content to:
+The Go process holds the sound ON/OFF state and exposes an HTTP API on the LAN.
+State-changing endpoints (`toggle` / `on` / `off`) accept **both GET and POST**, so any device can operate it with a single request.
 
-```text
-runtime/oled_status.txt
+| Method | Path | Action |
+| --- | --- | --- |
+| GET | `/sound` | Return current state (`{"enabled":true}`) |
+| GET/POST | `/sound/toggle` | Flip ON/OFF |
+| GET/POST | `/sound/on` | Turn ON |
+| GET/POST | `/sound/off` | Turn OFF |
+| GET | `/` | Minimal web page you can tap from a phone |
+
+Examples (`<pi>` is the Raspberry Pi IP, port from `SOUND_API_ADDR`):
+
+```bash
+curl http://<pi>:8099/sound              # check state
+curl -X POST http://<pi>:8099/sound/toggle
+curl -X POST http://<pi>:8099/sound/off
 ```
 
-The Python OLED daemon watches this file and updates the OLED display when it changes.
+- State is persisted to `runtime/sound_enabled` (`1` / `0`) and survives restarts.
+- If the state file is missing, the default is **ON** (so a network outage never leaves you permanently muted).
+- When switching from OFF to ON, a single confirmation test sound is played.
+
+## Runtime Files
+
+The following files are generated under `runtime/` at runtime (none need to be committed):
+
+```text
+runtime/sound_enabled     persisted sound ON/OFF state (1 / 0)
+runtime/oled_status.txt   OLED display content (only if you use an OLED / legacy)
+```
 
 Recommended repository layout:
 
 ```text
 vrchatlogs_favorites_notify/
 ├─ main.go
-├─ oled_daemon.py
+├─ oled_notify.py                 # optional / legacy
+├─ esp32/
+│  └─ sound_switch/
+│     └─ sound_switch.ino
 ├─ runtime/
 │  └─ .gitkeep
-├─ env.example
+├─ .env.example
 ├─ README.md
 └─ .gitignore
 ```
-
-Do not commit runtime output files.
 
 Recommended `.gitignore`:
 
 ```gitignore
 .env
 *.env
-runtime/*.txt
-vrchatlogs_favorites_notify
+runtime/*
+!runtime/.gitkeep
 ```
 
 ## Notification Sound
@@ -259,15 +289,16 @@ Run manually:
 ./vrchatlogs_favorites_notify
 ```
 
-## OLED Daemon
+## OLED Daemon (optional / legacy)
 
-The OLED display is handled by a Python daemon.
+Only used if you have an OLED connected. The Go process writes OLED content to `runtime/oled_status.txt`,
+and the Python daemon watches that file and updates the OLED.
 
 Example manual run:
 
 ```bash
 cd ~/vrchatlogs_favorites_notify
-python3 oled_daemon.py
+python3 oled_notify.py
 ```
 
 Manual display test:
@@ -276,49 +307,9 @@ Manual display test:
 printf "ONLINE\nTestFriend\n15:04\n" > runtime/oled_status.txt
 ```
 
-If the OLED does not display anything, check:
-
-```bash
-sudo i2cdetect -y 1
-```
-
-and confirm that `0x3c` is visible.
-
 ## systemd Setup
 
-This project uses two services:
-
-1. OLED daemon service
-2. VRChat notification watcher service
-
-### OLED daemon service
-
-Create:
-
-```bash
-sudo nano /etc/systemd/system/vrchat-oled.service
-```
-
-Example:
-
-```ini
-[Unit]
-Description=VRChat OLED display daemon
-After=multi-user.target
-
-[Service]
-Type=simple
-User=satomi
-WorkingDirectory=/home/satomi/vrchatlogs_favorites_notify
-ExecStart=/usr/bin/python3 /home/satomi/vrchatlogs_favorites_notify/oled_daemon.py
-Restart=always
-RestartSec=3
-
-[Install]
-WantedBy=multi-user.target
-```
-
-If your Python file name is different from `oled_daemon.py`, update `ExecStart`.
+Set up the VRChat notification watcher service. Add the OLED daemon service only if you use an OLED.
 
 ### Go watcher service
 
@@ -333,8 +324,8 @@ Example:
 ```ini
 [Unit]
 Description=VRChat favorites notify watcher
-After=network-online.target vrchat-oled.service
-Wants=network-online.target vrchat-oled.service
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
@@ -349,106 +340,95 @@ RestartSec=5
 WantedBy=multi-user.target
 ```
 
-Apply systemd changes:
+### OLED daemon service (optional / legacy)
+
+Create only if you use an OLED.
+
+```bash
+sudo nano /etc/systemd/system/vrchat-oled.service
+```
+
+```ini
+[Unit]
+Description=VRChat OLED display daemon
+After=multi-user.target
+
+[Service]
+Type=simple
+User=satomi
+WorkingDirectory=/home/satomi/vrchatlogs_favorites_notify
+ExecStart=/usr/bin/python3 /home/satomi/vrchatlogs_favorites_notify/oled_notify.py
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Apply, start, enable:
 
 ```bash
 sudo systemctl daemon-reload
+sudo systemctl enable --now vrchatlogs-favorites-notify.service
+# only if you use an OLED:
+# sudo systemctl enable --now vrchat-oled.service
 ```
 
-Start services:
+Status / logs:
 
 ```bash
-sudo systemctl start vrchat-oled.service
-sudo systemctl start vrchatlogs-favorites-notify.service
-```
-
-Check status:
-
-```bash
-sudo systemctl status vrchat-oled.service --no-pager -l
 sudo systemctl status vrchatlogs-favorites-notify.service --no-pager -l
-```
-
-Enable auto-start:
-
-```bash
-sudo systemctl enable vrchat-oled.service
-sudo systemctl enable vrchatlogs-favorites-notify.service
-```
-
-View logs:
-
-```bash
-journalctl -u vrchat-oled.service -f
 journalctl -u vrchatlogs-favorites-notify.service -f
 ```
 
 ## Operation
 
-### Display switch
+### Sound ON/OFF
 
-GPIO17 controls OLED display output.
-
-```text
-ON  -> OLED display enabled
-OFF -> OLED is cleared
-```
-
-When the display is turned ON again, the latest notification is restored.
-
-### Sound switch
-
-GPIO27 controls notification sound.
-
-```text
-ON  -> sound enabled
-OFF -> sound disabled
-```
-
-When the sound switch is turned ON again, a test sound is played.
+- Press the ESP32-C3 tact switch -> toggle (LED shows current state)
+- Open `http://<pi>:8099/` in a phone / PC browser -> ON / OFF / TOGGLE
+- From any device: `curl -X POST http://<pi>:8099/sound/toggle`
 
 ### Discord
 
-Discord notifications are sent regardless of display/sound switch state.
+Discord notifications are sent regardless of the sound ON/OFF state.
 
-This is intentional so that physical output can be muted without stopping notification monitoring.
+This is intentional so that local sound output can be muted without stopping notification monitoring.
 
 ## Troubleshooting
 
-### OLED does not display anything
+### Sound does not play
 
-Check I2C:
-
-```bash
-sudo i2cdetect -y 1
-```
-
-Expected:
-
-```text
-3c
-```
-
-Restart OLED daemon:
+First check the sound file and ALSA:
 
 ```bash
-sudo systemctl restart vrchat-oled.service
-sudo systemctl status vrchat-oled.service --no-pager -l
+ls -l /home/satomi/notify.wav
+aplay /home/satomi/notify.wav
 ```
 
-Check logs:
+Then check the sound state:
 
 ```bash
-journalctl -u vrchat-oled.service -n 80 --no-pager
+curl http://<pi>:8099/sound     # is it {"enabled":true}?
+cat runtime/sound_enabled       # 1 means ON
 ```
 
-If the log says:
+If it is `{"enabled":false}`, it is OFF. Turn it back on:
 
-```text
-can't open file '.../oled_daemon.py'
+```bash
+curl -X POST http://<pi>:8099/sound/on
 ```
 
-then the Python file name or path in `ExecStart` is wrong.
+### ESP32 cannot toggle
+
+- Check Wi-Fi connection and HTTP response code on the ESP32 serial monitor (115200).
+- Confirm `PI_HOST` / `PI_PORT` match the Raspberry Pi IP and `SOUND_API_ADDR`.
+- Confirm the API is listening on the Raspberry Pi:
+
+```bash
+curl http://<pi>:8099/sound
+sudo ss -ltnp | grep 8099
+```
 
 ### Environment variables are not loaded
 
@@ -458,39 +438,17 @@ Check the Go service file includes:
 EnvironmentFile=/etc/vrchat-logger.env
 ```
 
-Check the file exists:
-
-```bash
-sudo cat /etc/vrchat-logger.env
-```
-
 Check service logs:
 
 ```bash
 journalctl -u vrchatlogs-favorites-notify.service -n 80 --no-pager
 ```
 
-If you see:
+If you see the following, the environment file is missing, unreadable, or misconfigured:
 
 ```text
 VRC_AUTH_TOKEN not found
-```
-
-or:
-
-```text
 VRC_TWO_FACTOR_AUTH_TOKEN not found
-```
-
-then the environment file is missing, unreadable, or incorrectly configured.
-
-### Sound does not play
-
-Check the sound file:
-
-```bash
-ls -l /home/satomi/notify.wav
-aplay /home/satomi/notify.wav
 ```
 
 ### Favorite list cannot be fetched
@@ -502,17 +460,18 @@ Requires Two-Factor Authentication
 ```
 
 then `VRC_TWO_FACTOR_AUTH_TOKEN` is missing, expired, or incorrect.
-
-Get a fresh `twoFactorAuth` cookie from a logged-in browser session and update:
-
-```text
-/etc/vrchat-logger.env
-```
-
-Then restart:
+Get a fresh `twoFactorAuth` cookie from a logged-in browser session, update `/etc/vrchat-logger.env`, and restart:
 
 ```bash
 sudo systemctl restart vrchatlogs-favorites-notify.service
+```
+
+### OLED does not display anything (optional / legacy)
+
+```bash
+sudo i2cdetect -y 1                         # is 3c visible?
+sudo systemctl restart vrchat-oled.service
+journalctl -u vrchat-oled.service -n 80 --no-pager
 ```
 
 ## Security Notes
@@ -524,6 +483,7 @@ sudo systemctl restart vrchatlogs-favorites-notify.service
   * `DISCORD_WEBHOOK_URL_FAVORITES`
 * The WebSocket connection uses a URL that includes the auth token:
   `wss://pipeline.vrchat.cloud/?authToken=...`
+* The sound control API (`SOUND_API_ADDR`) has no authentication. Expose it **only on a trusted LAN** and never to the internet.
 * Be careful not to leak tokens through logs, screenshots, shell history, monitoring tools, or crash reports.
 * If any token or webhook URL is exposed, rotate it immediately.
 * `/etc/vrchat-logger.env` should be readable only by root.

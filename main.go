@@ -10,21 +10,23 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
-	"periph.io/x/conn/v3/gpio"
-	"periph.io/x/conn/v3/gpio/gpioreg"
-	"periph.io/x/host/v3"
 )
 
 const userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36"
 
-var displayPin gpio.PinIO
-var soundPin gpio.PinIO
-var oledMu sync.Mutex
-var latestOLEDLines = [4]string{"VRChat Notify", "Waiting...", "", ""}
+// soundEnabled is the single source of truth for whether notifications play a
+// sound. It is toggled over HTTP (from an ESP32 button, a phone, curl, ...) and
+// persisted to disk so the choice survives restarts.
+var soundEnabled atomic.Bool
+
+const soundStateFile = "runtime/sound_enabled"
+
 var hubDataDir string
 
 type envelope struct {
@@ -102,7 +104,7 @@ func notifyOnlineStatus(webhookURL, status, userName string) {
 	log.Printf("[STATUS] %s user=%s\n", status, userName)
 	notifyDiscord(webhookURL, msg)
 
-	showOLED(status, userName, now, "")
+	publishStatus(status, userName, now, "")
 
 	if isSoundEnabled() {
 		playSound()
@@ -122,7 +124,7 @@ func notifyWorldMove(webhookURL, userName, worldName string) {
 	log.Printf("[WORLD MOVE] user=%s destination=%s\n", userName, destination)
 	notifyDiscord(webhookURL, msg)
 
-	showOLED("MOVE", userName, destination, now)
+	publishStatus("MOVE", userName, destination, now)
 
 	if isSoundEnabled() {
 		playSound()
@@ -279,17 +281,11 @@ func getWorldName(token, worldID string) string {
 	return parsed.Name
 }
 
-func writeOLEDFile(line1, line2, line3, line4 string) {
-	if err := os.MkdirAll("runtime", 0755); err != nil {
-		log.Println("oled mkdir error:", err)
-		return
-	}
-
-	content := fmt.Sprintf("%s\n%s\n%s\n%s\n", line1, line2, line3, line4)
-
-	if err := os.WriteFile("runtime/oled_status.txt", []byte(content), 0644); err != nil {
-		log.Println("oled write error:", err)
-	}
+// publishStatus pushes the latest notification lines to the optional hub
+// integration (HUB_DATA_DIR). The physical OLED has been retired, so this is
+// now the only status sink besides Discord.
+func publishStatus(line1, line2, line3, line4 string) {
+	writeHubJSON(line1, line2, line3, line4)
 }
 
 func writeHubJSON(line1, line2, line3, line4 string) {
@@ -321,29 +317,6 @@ func writeHubJSON(line1, line2, line3, line4 string) {
 	}
 }
 
-func showOLED(line1, line2, line3, line4 string) {
-	oledMu.Lock()
-	latestOLEDLines = [4]string{line1, line2, line3, line4}
-	oledMu.Unlock()
-
-	if isDisplayEnabled() {
-		writeOLEDFile(line1, line2, line3, line4)
-	}
-
-	writeHubJSON(line1, line2, line3, line4)
-}
-
-func restoreOLED() {
-	oledMu.Lock()
-	lines := latestOLEDLines
-	oledMu.Unlock()
-
-	writeOLEDFile(lines[0], lines[1], lines[2], lines[3])
-}
-
-func clearOLED() {
-	writeOLEDFile("", "", "", "")
-}
 func playSound() {
 	go func() {
 		cmd := exec.Command("aplay", "/home/satomi/notify.wav")
@@ -354,46 +327,131 @@ func playSound() {
 	}()
 }
 
-func initGPIO() error {
-	if _, err := host.Init(); err != nil {
-		return err
-	}
-
-	displayPin = gpioreg.ByName("GPIO17")
-	if displayPin == nil {
-		return fmt.Errorf("GPIO17 not found")
-	}
-
-	soundPin = gpioreg.ByName("GPIO27")
-	if soundPin == nil {
-		return fmt.Errorf("GPIO27 not found")
-	}
-
-	if err := displayPin.In(gpio.PullUp, gpio.NoEdge); err != nil {
-		return fmt.Errorf("GPIO17 input error: %w", err)
-	}
-
-	if err := soundPin.In(gpio.PullUp, gpio.NoEdge); err != nil {
-		return fmt.Errorf("GPIO27 input error: %w", err)
-	}
-
-	return nil
-}
-
-func isDisplayEnabled() bool {
-	if displayPin == nil {
-		return true
-	}
-
-	return displayPin.Read() == gpio.Low
-}
-
 func isSoundEnabled() bool {
-	if soundPin == nil {
-		return true
+	return soundEnabled.Load()
+}
+
+// setSoundEnabled updates the state and persists it. It returns true when the
+// value actually changed.
+func setSoundEnabled(enabled bool) (changed bool) {
+	changed = soundEnabled.Swap(enabled) != enabled
+	if changed {
+		persistSoundState()
+		log.Printf("sound enabled -> %v\n", enabled)
+	}
+	return changed
+}
+
+// loadSoundState restores the persisted flag. Defaults to ON so a fresh install
+// (or a lost state file) still notifies audibly.
+func loadSoundState() {
+	soundEnabled.Store(true)
+
+	b, err := os.ReadFile(soundStateFile)
+	if err != nil {
+		return
 	}
 
-	return soundPin.Read() == gpio.Low
+	switch strings.TrimSpace(string(b)) {
+	case "0", "false", "off":
+		soundEnabled.Store(false)
+	default:
+		soundEnabled.Store(true)
+	}
+}
+
+func persistSoundState() {
+	if err := os.MkdirAll("runtime", 0755); err != nil {
+		log.Println("sound state mkdir error:", err)
+		return
+	}
+
+	v := "1"
+	if !soundEnabled.Load() {
+		v = "0"
+	}
+
+	if err := os.WriteFile(soundStateFile, []byte(v+"\n"), 0644); err != nil {
+		log.Println("sound state write error:", err)
+	}
+}
+
+const controlIndexHTML = `<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VRChat Notify Sound</title>
+<style>
+  body{font-family:system-ui,sans-serif;max-width:24rem;margin:3rem auto;padding:0 1rem;text-align:center}
+  #state{font-size:2rem;margin:1.5rem 0;font-weight:700}
+  button{font-size:1.1rem;padding:.8rem 1.4rem;margin:.3rem;border:0;border-radius:.6rem;cursor:pointer}
+  .on{background:#2e7d32;color:#fff}.off{background:#c62828;color:#fff}.tg{background:#455a64;color:#fff}
+</style>
+</head>
+<body>
+  <h1>通知音</h1>
+  <div id="state">...</div>
+  <button class="on" onclick="send('/sound/on')">ON</button>
+  <button class="off" onclick="send('/sound/off')">OFF</button>
+  <button class="tg" onclick="send('/sound/toggle')">TOGGLE</button>
+<script>
+async function refresh(){const r=await fetch('/sound');const j=await r.json();render(j.enabled);}
+async function send(p){const r=await fetch(p,{method:'POST'});const j=await r.json();render(j.enabled);}
+function render(on){document.getElementById('state').textContent=on?'🔊 ON':'🔇 OFF';}
+refresh();
+</script>
+</body>
+</html>`
+
+// startControlServer exposes the sound state over HTTP so any device can flip
+// it. Mutations respond to GET or POST alike, so anything from an ESP32 to a
+// browser bookmark to `curl` works with a single request.
+func startControlServer(addr string) {
+	mux := http.NewServeMux()
+
+	writeState := func(w http.ResponseWriter) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]bool{"enabled": isSoundEnabled()})
+	}
+
+	mutate := func(w http.ResponseWriter, next func(cur bool) bool) {
+		target := next(isSoundEnabled())
+		changed := setSoundEnabled(target)
+		// Play a short confirmation only when sound transitions to ON.
+		if target && changed {
+			playSound()
+		}
+		writeState(w)
+	}
+
+	mux.HandleFunc("/sound/toggle", func(w http.ResponseWriter, r *http.Request) {
+		mutate(w, func(cur bool) bool { return !cur })
+	})
+	mux.HandleFunc("/sound/on", func(w http.ResponseWriter, r *http.Request) {
+		mutate(w, func(bool) bool { return true })
+	})
+	mux.HandleFunc("/sound/off", func(w http.ResponseWriter, r *http.Request) {
+		mutate(w, func(bool) bool { return false })
+	})
+	mux.HandleFunc("/sound", func(w http.ResponseWriter, r *http.Request) {
+		writeState(w)
+	})
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = io.WriteString(w, controlIndexHTML)
+	})
+
+	go func() {
+		log.Printf("sound control server listening on %s\n", addr)
+		if err := http.ListenAndServe(addr, mux); err != nil {
+			log.Println("control server error:", err)
+		}
+	}()
 }
 
 func main() {
@@ -413,11 +471,15 @@ func main() {
 	hubDataDir = os.Getenv("HUB_DATA_DIR")
 	discordWebhook := os.Getenv("DISCORD_WEBHOOK_URL_FAVORITES")
 
-	if err := initGPIO(); err != nil {
-		log.Fatal("gpio init error:", err)
+	controlAddr := os.Getenv("SOUND_API_ADDR")
+	if controlAddr == "" {
+		controlAddr = ":8099"
 	}
 
-	log.Printf("switch initial state: display=%v sound=%v\n", isDisplayEnabled(), isSoundEnabled())
+	loadSoundState()
+	log.Printf("sound initial state: enabled=%v\n", isSoundEnabled())
+	startControlServer(controlAddr)
+
 	var targetMu sync.RWMutex
 	targetFriendIDs := map[string]bool{}
 	userNameMap := map[string]string{}
@@ -468,48 +530,7 @@ func main() {
 	}
 	refreshTargets()
 
-	go func() {
-		lastDisplayEnabled := isDisplayEnabled()
-
-		for {
-			current := isDisplayEnabled()
-
-			if lastDisplayEnabled && !current {
-				clearOLED()
-				log.Println("display disabled: OLED cleared")
-			}
-
-			if !lastDisplayEnabled && current {
-				restoreOLED()
-				log.Println("display enabled: OLED restored")
-			}
-
-			lastDisplayEnabled = current
-			time.Sleep(300 * time.Millisecond)
-		}
-	}()
-
-	go func() {
-		lastSoundEnabled := isSoundEnabled()
-
-		for {
-			current := isSoundEnabled()
-
-			if !lastSoundEnabled && current {
-				playSound()
-				log.Println("sound enabled: test sound played")
-			}
-
-			lastSoundEnabled = current
-			time.Sleep(300 * time.Millisecond)
-		}
-	}()
-
-	showOLED("VRChat Notify", "Waiting...", time.Now().Format("15:04"), "")
-
-	if !isDisplayEnabled() {
-		clearOLED()
-	}
+	publishStatus("VRChat Notify", "Waiting...", time.Now().Format("15:04"), "")
 
 	if isSoundEnabled() {
 		playSound()
