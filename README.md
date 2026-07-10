@@ -434,6 +434,20 @@ cat runtime/sound_enabled       # 1 なら ON
 curl -X POST http://<pi>:8099/sound/on
 ```
 
+### ESP32がWi-Fiに繋がらない（スキャンはできるのに認証で失敗する）
+
+シリアルに `wifi disconnected, reason=2` が延々と出て、**どのAPに対しても**（スマホのテザリング相手でも）接続できない場合、
+C3 SuperMiniによくある**アンテナ整合回路の不良個体**の可能性が高いです。受信（スキャン）は正常でも、
+最大出力の送信が歪んでAPに認証フレームが届かず、無視され続けます。
+
+本ファームウェアは対策として送信出力を下げています（`WiFi.setTxPower(WIFI_POWER_8_5dBm)` in `connectWiFi()`）。
+それでも繋がらない場合は、さらに低い値（`WIFI_POWER_5dBm` / `WIFI_POWER_2dBm`）も試してください。
+良品基板で電波の届きが悪い場合は、この行を外して出力を上げることもできます。
+
+- `reason=2` = APが認証に応答していない（電波・個体不良・MACフィルタ）
+- `reason=15` = パスワード間違い（4-wayハンドシェイク失敗）
+- `reason=201` = SSIDが見つからない（5GHz専用SSID・圏外）
+
 ### ESP32からトグルできない
 
 - ESP32のシリアルモニタ（115200）でWi-Fi接続とHTTP応答コードを確認します。

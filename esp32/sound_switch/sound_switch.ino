@@ -51,6 +51,12 @@ void onWiFiEvent(WiFiEvent_t event, WiFiEventInfo_t info) {
 void connectWiFi() {
   WiFi.onEvent(onWiFiEvent);
   WiFi.mode(WIFI_STA);
+  delay(100);
+  // Many C3 SuperMini boards have a defective antenna matching network: RX is
+  // fine but full-power TX is so distorted the AP never hears our auth frames
+  // (endless reason=2 against every AP). Reducing TX power makes them connect
+  // reliably. Raise/remove this only if your board is known-good.
+  WiFi.setTxPower(WIFI_POWER_8_5dBm);
   Serial.printf("connecting to \"%s\"\n", WIFI_SSID);
   WiFi.begin(WIFI_SSID, WIFI_PASS);
 

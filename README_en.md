@@ -434,6 +434,20 @@ If it is `{"enabled":false}`, it is OFF. Turn it back on:
 curl -X POST http://<pi>:8099/sound/on
 ```
 
+### ESP32 cannot join Wi-Fi (scan works, auth always fails)
+
+If serial shows endless `wifi disconnected, reason=2` against **every** AP (even a phone hotspot),
+you likely have a C3 SuperMini with the common **defective antenna matching network**: RX (scanning)
+works, but full-power TX is so distorted the AP never hears the auth frames and silently ignores the board.
+
+This firmware works around it by lowering TX power (`WiFi.setTxPower(WIFI_POWER_8_5dBm)` in `connectWiFi()`).
+If it still fails, try lower values (`WIFI_POWER_5dBm` / `WIFI_POWER_2dBm`). On a known-good board with
+weak range you can remove the line to restore full power.
+
+- `reason=2` = AP not responding to auth (RF/defective board/MAC filter)
+- `reason=15` = wrong password (4-way handshake failure)
+- `reason=201` = SSID not found (5GHz-only SSID / out of range)
+
 ### ESP32 cannot toggle
 
 - Check Wi-Fi connection and HTTP response code on the ESP32 serial monitor (115200).
