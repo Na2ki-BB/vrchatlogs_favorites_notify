@@ -150,6 +150,10 @@ sudo i2cdetect -y 1   # 3c が見えればOK
 ```bash
 VRC_AUTH_TOKEN=YOUR_VRCHAT_AUTH_COOKIE
 VRC_TWO_FACTOR_AUTH_TOKEN=YOUR_VRCHAT_TWO_FACTOR_AUTH_COOKIE
+VRC_USERNAME=YOUR_LOGIN_USERNAME
+VRC_PASSWORD=YOUR_PASSWORD
+VRC_TOTP_SECRET=YOUR_BASE32_TOTP_SEED
+VRC_USER_AGENT="vrchat-friendnotify-auth/1.0 contact@example.com"
 VRC_NOTIFY_FAVORITE_TAG=group_0
 DISCORD_WEBHOOK_URL_FAVORITES=https://discord.com/api/webhooks/...
 SOUND_API_ADDR=:8099
@@ -206,6 +210,52 @@ sudo nano /etc/vrchat-logger.env
 sudo chown root:root /etc/vrchat-logger.env
 sudo chmod 600 /etc/vrchat-logger.env
 ```
+
+## Auth Cookie Generator
+
+`cmd/vrchat-auth-cookies` は、VRChatのユーザー名・パスワードとTOTPシークレットからログインし、
+通知サービスが必要とする `auth` / `twoFactorAuth` Cookieを生成します。
+
+認証順序は次のとおりです。
+
+1. Basic認証で `GET /auth/user` を呼び、`auth` Cookieを取得します。
+2. 同じセッションでTOTPコードを1回生成し、`POST /auth/twofactorauth/totp/verify` へ送ります。
+3. 応答から `twoFactorAuth` Cookieを取得し、認証済みセッションを再確認します。
+4. 2つのCookieを `.env` 形式で標準出力します。
+
+TOTPを2回行う必要はありません。`twoFactorAuth`はTOTPコードそのものではなく、TOTP検証済み端末を記憶するCookieです。
+
+既存の `/etc/vrchat-logger.env` に、Cookie生成用の4項目を追加します。これらはメインサービスでは使用せず、Cookie生成コマンドだけが読みます。
+
+```bash
+VRC_USERNAME=YOUR_LOGIN_USERNAME
+VRC_PASSWORD=YOUR_PASSWORD
+VRC_TOTP_SECRET=YOUR_BASE32_TOTP_SEED
+VRC_USER_AGENT="vrchat-friendnotify-auth/1.0 contact@example.com"
+```
+
+- `VRC_USERNAME` はログイン用ユーザー名です。`usr_...` 形式のVRChat User IDではありません。
+- `VRC_TOTP_SECRET` は認証アプリに登録したBase32シークレットです。現在表示されている6桁コードや `otpauth://` URIではありません。
+- `VRC_USER_AGENT` の連絡先は、自分が受信できるメールアドレス等へ変更してください。
+
+Cookieを生成して、同じ `/etc/vrchat-logger.env` の2つのCookie行を自動更新します。
+
+```bash
+sudo go run ./cmd/vrchat-auth-cookies -update-env
+sudo systemctl restart vrchatlogs-favorites-notify.service
+```
+
+デフォルトで `/etc/vrchat-logger.env` を直接読みます。systemdの環境変数をシェルへ読み込むための `set -a` や `source` は不要です。
+`-update-env` を付けない場合はファイルを書き換えず、次の2行を標準出力します。
+
+```text
+VRC_AUTH_TOKEN=authcookie_...
+VRC_TWO_FACTOR_AUTH_TOKEN=...
+```
+
+別の環境ファイルを使う場合だけ `-env-file /path/to/file` を指定します。Cookie生成を実行するたびに新しいログインセッションを作るため、
+定期実行したり、サービス起動のたびに実行したりしないでください。出力Cookie、パスワード、TOTPシークレットはすべて認証情報として扱い、
+Git、ログ、シェル履歴へ残さないでください。TOTPは端末時刻に依存するため、NTPで時刻同期されている必要があります。
 
 ## Sound Control API
 

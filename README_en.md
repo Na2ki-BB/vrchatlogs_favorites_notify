@@ -150,6 +150,10 @@ Example:
 ```bash
 VRC_AUTH_TOKEN=YOUR_VRCHAT_AUTH_COOKIE
 VRC_TWO_FACTOR_AUTH_TOKEN=YOUR_VRCHAT_TWO_FACTOR_AUTH_COOKIE
+VRC_USERNAME=YOUR_LOGIN_USERNAME
+VRC_PASSWORD=YOUR_PASSWORD
+VRC_TOTP_SECRET=YOUR_BASE32_TOTP_SEED
+VRC_USER_AGENT="vrchat-friendnotify-auth/1.0 contact@example.com"
 VRC_NOTIFY_FAVORITE_TAG=group_0
 DISCORD_WEBHOOK_URL_FAVORITES=https://discord.com/api/webhooks/...
 SOUND_API_ADDR=:8099
@@ -206,6 +210,52 @@ Recommended permissions:
 sudo chown root:root /etc/vrchat-logger.env
 sudo chmod 600 /etc/vrchat-logger.env
 ```
+
+## Auth Cookie Generator
+
+`cmd/vrchat-auth-cookies` logs in with a VRChat username, password, and TOTP seed, then generates the
+`auth` and `twoFactorAuth` cookies required by the notification service.
+
+The flow is:
+
+1. Call `GET /auth/user` with Basic authentication and capture the `auth` cookie.
+2. Generate one TOTP code and submit it to `POST /auth/twofactorauth/totp/verify` in the same session.
+3. Capture the returned `twoFactorAuth` cookie and verify the authenticated session.
+4. Print both cookies to stdout in `.env` format.
+
+TOTP is performed once, not twice. `twoFactorAuth` is a cookie remembering a TOTP-verified device; it is not the TOTP code itself.
+
+Add these four cookie-generator settings to the existing `/etc/vrchat-logger.env`. The main service ignores them; only the generator reads them.
+
+```bash
+VRC_USERNAME=YOUR_LOGIN_USERNAME
+VRC_PASSWORD=YOUR_PASSWORD
+VRC_TOTP_SECRET=YOUR_BASE32_TOTP_SEED
+VRC_USER_AGENT="vrchat-friendnotify-auth/1.0 contact@example.com"
+```
+
+- `VRC_USERNAME` is the login username, not a VRChat `usr_...` user ID.
+- `VRC_TOTP_SECRET` is the Base32 seed registered with the authenticator app, not a current six-digit code or an `otpauth://` URI.
+- Replace the `VRC_USER_AGENT` contact with an email address or other contact you receive.
+
+Generate the cookies, update both cookie entries in `/etc/vrchat-logger.env`, and restart the service:
+
+```bash
+sudo go run ./cmd/vrchat-auth-cookies -update-env
+sudo systemctl restart vrchatlogs-favorites-notify.service
+```
+
+The command reads `/etc/vrchat-logger.env` directly by default, so no `set -a` or `source` command is needed. Without `-update-env`,
+the file is left unchanged and the command prints only:
+
+```text
+VRC_AUTH_TOKEN=authcookie_...
+VRC_TWO_FACTOR_AUTH_TOKEN=...
+```
+
+Use `-env-file /path/to/file` only when the settings are stored elsewhere. Each generator run creates a new login session,
+so do not run it periodically or on every service start. Treat the output cookies, password, and TOTP seed as credentials;
+do not put them in Git, logs, or shell history. TOTP also requires an NTP-synchronized system clock.
 
 ## Sound Control API
 
