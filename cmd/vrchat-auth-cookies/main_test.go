@@ -100,6 +100,26 @@ func TestUpdateEnvironmentFilePreservesUnrelatedBytesAndLineEndings(t *testing.T
 	}
 }
 
+func TestUpdateEnvironmentFilePreservesMissingFinalNewline(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "vrchat-logger.env")
+	original := "VRC_AUTH_TOKEN=old-auth\nVRC_TWO_FACTOR_AUTH_TOKEN=old-two-factor"
+	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := updateEnvironmentFile(path, cookiePair{Auth: "new-auth", TwoFactor: "new-two-factor"}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "VRC_AUTH_TOKEN=new-auth\nVRC_TWO_FACTOR_AUTH_TOKEN=new-two-factor"
+	if string(data) != want {
+		t.Fatalf("updated file = %q, want %q", data, want)
+	}
+}
+
 func TestUpdateEnvironmentFileRenameFailureLeavesOriginalAndRemovesTemporaryFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "vrchat-logger.env")

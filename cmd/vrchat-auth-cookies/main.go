@@ -148,11 +148,6 @@ func main() {
 	}
 }
 
-func terminalInput(f *os.File) bool {
-	info, err := f.Stat()
-	return err == nil && info.Mode()&os.ModeCharDevice != 0
-}
-
 func resolveEnvironmentPath(path string) (string, error) {
 	abs, err := filepath.Abs(path)
 	if err != nil {
@@ -435,11 +430,17 @@ func updateEnvironmentFileWithRename(path string, cookies cookiePair, rename fun
 		updated.WriteString(ending)
 		found[key] = true
 	}
-	if updated.Len() > 0 && !strings.HasSuffix(updated.String(), "\n") {
-		updated.WriteString(newline)
-	}
+	missing := make([]string, 0, 2)
 	for _, key := range []string{"VRC_AUTH_TOKEN", "VRC_TWO_FACTOR_AUTH_TOKEN"} {
 		if !found[key] {
+			missing = append(missing, key)
+		}
+	}
+	if len(missing) > 0 {
+		if updated.Len() > 0 && !strings.HasSuffix(updated.String(), "\n") {
+			updated.WriteString(newline)
+		}
+		for _, key := range missing {
 			updated.WriteString(key + "=" + replacements[key] + newline)
 		}
 	}
@@ -451,15 +452,17 @@ func updateEnvironmentFileWithRename(path string, cookies cookiePair, rename fun
 	tmpName := tmp.Name()
 	defer os.Remove(tmpName)
 
-	if err := tmp.Chmod(info.Mode().Perm()); err != nil {
-		tmp.Close()
-		return err
-	}
 	if err := preserveFileOwnership(tmp, info); err != nil {
 		tmp.Close()
 		return err
 	}
 	if _, err := io.WriteString(tmp, updated.String()); err != nil {
+		tmp.Close()
+		return err
+	}
+	// Chown and file writes can clear set-id bits, so restore the complete
+	// original mode only after ownership and content have been applied.
+	if err := tmp.Chmod(info.Mode()); err != nil {
 		tmp.Close()
 		return err
 	}
