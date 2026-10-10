@@ -238,7 +238,16 @@ VRC_USER_AGENT="vrchat-friendnotify-auth/1.0 contact@example.com"
 - `VRC_TOTP_SECRET` は認証アプリに登録したBase32シークレットです。現在表示されている6桁コードや `otpauth://` URIではありません。
 - `VRC_USER_AGENT` の連絡先は、自分が受信できるメールアドレス等へ変更してください。
 
-Cookieを生成して、同じ `/etc/vrchat-logger.env` の2つのCookie行を自動更新します。
+オプションなしで端末から起動すると、Cookie生成後に実際の環境ファイルパスを表示し、更新するか確認します。
+`y` / `yes` で更新し、`n` / `no`、空入力、EOFでは更新しません。更新した場合も断った場合もCookieは標準出力へ出るため、
+標準出力は認証情報として扱ってください。質問と結果は標準エラー出力へ出るので、標準出力のパイプ形式は変わりません。
+
+```bash
+sudo go run ./cmd/vrchat-auth-cookies
+```
+
+従来どおり確認なしで同じ `/etc/vrchat-logger.env` の2つのCookie行を更新する場合は、`-update-env` を明示します。
+このモードはCookieを標準出力へ表示しません。
 
 ```bash
 sudo go run ./cmd/vrchat-auth-cookies -update-env
@@ -246,14 +255,15 @@ sudo systemctl restart vrchatlogs-favorites-notify.service
 ```
 
 デフォルトで `/etc/vrchat-logger.env` を直接読みます。systemdの環境変数をシェルへ読み込むための `set -a` や `source` は不要です。
-`-update-env` を付けない場合はファイルを書き換えず、次の2行を標準出力します。
+非TTYから起動した場合、または `-env-file` などを明示して `-interactive` を付けなかった場合は、従来どおりファイルを書き換えず、
+次の2行を標準出力します。
 
 ```text
 VRC_AUTH_TOKEN=authcookie_...
 VRC_TWO_FACTOR_AUTH_TOKEN=...
 ```
 
-別の環境ファイルを使う場合だけ `-env-file /path/to/file` を指定します。Cookie生成を実行するたびに新しいログインセッションを作るため、
+別の環境ファイルで対話確認する場合は `-env-file /path/to/file -interactive` を指定します。Cookie生成を実行するたびに新しいログインセッションを作るため、
 定期実行したり、サービス起動のたびに実行したりしないでください。出力Cookie、パスワード、TOTPシークレットはすべて認証情報として扱い、
 Git、ログ、シェル履歴へ残さないでください。TOTPは端末時刻に依存するため、NTPで時刻同期されている必要があります。
 
