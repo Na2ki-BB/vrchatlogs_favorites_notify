@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/sha1"
@@ -62,19 +63,50 @@ type apiErrorResponse struct {
 	} `json:"error"`
 }
 
+type cookieOutputOptions struct {
+	envFile     string
+	updateEnv   bool
+	interactive bool
+	resultFD    int
+}
+
 func main() {
 	log.SetFlags(0)
 
 	envFile := flag.String("env-file", "/etc/vrchat-logger.env", "environment file containing VRChat credentials (empty: process environment only)")
 	updateEnv := flag.Bool("update-env", false, "replace VRC_AUTH_TOKEN values in the environment file instead of printing them")
+	interactive := flag.Bool("interactive", false, "ask before updating the environment file (default when no flags are given in a terminal)")
+	resultFD := flag.Int("result-fd", -1, "write the non-secret interactive result to this inherited file descriptor")
 	flag.Parse()
+	if *updateEnv && *interactive {
+		log.Fatal("-update-env and -interactive cannot be used together")
+	}
+	if *resultFD >= 0 && !*interactive {
+		log.Fatal("-result-fd requires -interactive")
+	}
+	if *resultFD >= 0 && *resultFD < 3 {
+		log.Fatal("-result-fd must be an inherited descriptor numbered 3 or greater")
+	}
+
+	flagWasSet := false
+	flag.Visit(func(*flag.Flag) { flagWasSet = true })
+	autoInteractive := !flagWasSet && terminalInput(os.Stdin)
+
+	resolvedEnvFile := *envFile
+	if resolvedEnvFile != "" {
+		var err error
+		resolvedEnvFile, err = resolveEnvironmentPath(resolvedEnvFile)
+		if err != nil {
+			log.Fatalf("resolve environment file %s: %v", *envFile, err)
+		}
+	}
 
 	fileValues := map[string]string{}
 	var err error
-	if *envFile != "" {
-		fileValues, err = readEnvironmentFile(*envFile)
+	if resolvedEnvFile != "" {
+		fileValues, err = readEnvironmentFile(resolvedEnvFile)
 		if err != nil {
-			log.Fatalf("read environment file %s: %v", *envFile, err)
+			log.Fatalf("read environment file %s: %v", resolvedEnvFile, err)
 		}
 	}
 
@@ -99,20 +131,132 @@ func main() {
 		log.Fatal(err)
 	}
 
-	if *updateEnv {
-		if *envFile == "" {
-			log.Fatal("-update-env requires -env-file")
+	if err := handleCookieOutput(
+		os.Stdin,
+		os.Stdout,
+		os.Stderr,
+		cookies,
+		cookieOutputOptions{
+			envFile:     resolvedEnvFile,
+			updateEnv:   *updateEnv,
+			interactive: *interactive || autoInteractive,
+			resultFD:    *resultFD,
+		},
+		updateEnvironmentFile,
+	); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func terminalInput(f *os.File) bool {
+	info, err := f.Stat()
+	return err == nil && info.Mode()&os.ModeCharDevice != 0
+}
+
+func resolveEnvironmentPath(path string) (string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	resolved, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return "", err
+	}
+	return resolved, nil
+}
+
+func handleCookieOutput(
+	in io.Reader,
+	stdout io.Writer,
+	stderr io.Writer,
+	cookies cookiePair,
+	options cookieOutputOptions,
+	update func(string, cookiePair) error,
+) error {
+	if options.updateEnv {
+		if options.envFile == "" {
+			return errors.New("-update-env requires -env-file")
 		}
-		if err := updateEnvironmentFile(*envFile, cookies); err != nil {
-			log.Fatal("update environment file: ", err)
+		if err := update(options.envFile, cookies); err != nil {
+			return fmt.Errorf("update environment file: %w", err)
 		}
-		fmt.Fprintf(os.Stderr, "authentication succeeded; updated %s\n", *envFile)
-		return
+		fmt.Fprintf(stderr, "authentication succeeded; updated %s\n", options.envFile)
+		return nil
+	}
+
+	if options.interactive {
+		if options.envFile == "" {
+			return errors.New("interactive update requires -env-file")
+		}
+		confirmed, err := promptYesNo(in, stderr, fmt.Sprintf("Update cookies in %s? [y/n]: ", options.envFile))
+		if err != nil {
+			return err
+		}
+		if confirmed {
+			if err := update(options.envFile, cookies); err != nil {
+				return fmt.Errorf("update environment file: %w", err)
+			}
+			if err := writeInteractiveResult(options.resultFD, "updated"); err != nil {
+				return err
+			}
+			printCookies(stdout, cookies)
+			fmt.Fprintf(stderr, "authentication succeeded; updated %s\n", options.envFile)
+			return nil
+		}
+		if err := writeInteractiveResult(options.resultFD, "skipped"); err != nil {
+			return err
+		}
+		printCookies(stdout, cookies)
+		fmt.Fprintln(stderr, "authentication succeeded; environment file was not changed")
+		fmt.Fprintln(stderr, "protect the cookie output like a password")
+		return nil
 	}
 
 	// Keep stdout machine-readable. All diagnostics are written to stderr.
-	printCookies(os.Stdout, cookies)
-	fmt.Fprintln(os.Stderr, "authentication succeeded; protect the cookie output like a password")
+	printCookies(stdout, cookies)
+	fmt.Fprintln(stderr, "authentication succeeded; protect the cookie output like a password")
+	return nil
+}
+
+func promptYesNo(in io.Reader, out io.Writer, prompt string) (bool, error) {
+	reader := bufio.NewReader(in)
+	for {
+		fmt.Fprint(out, prompt)
+		line, err := reader.ReadString('\n')
+		answer := strings.ToLower(strings.TrimSpace(line))
+		if err != nil && !errors.Is(err, io.EOF) {
+			return false, fmt.Errorf("read confirmation: %w", err)
+		}
+		switch answer {
+		case "y", "yes":
+			return true, nil
+		case "n", "no":
+			return false, nil
+		case "":
+			fmt.Fprintln(out, "no answer received; environment file will not be changed")
+			return false, nil
+		default:
+			fmt.Fprintln(out, "please answer y/yes or n/no")
+		}
+		if errors.Is(err, io.EOF) {
+			fmt.Fprintln(out, "end of input; environment file will not be changed")
+			return false, nil
+		}
+	}
+}
+
+func writeInteractiveResult(fd int, result string) error {
+	if fd < 0 {
+		return nil
+	}
+	f := os.NewFile(uintptr(fd), "interactive-result")
+	if f == nil {
+		return fmt.Errorf("result file descriptor %d is unavailable", fd)
+	}
+	if _, err := io.WriteString(f, result+"\n"); err != nil {
+		return fmt.Errorf("write interactive result: %w", err)
+	}
+	return nil
 }
 
 func credentialsFromSources(fileValues map[string]string) (credentials, error) {
@@ -219,6 +363,10 @@ func validEnvironmentName(name string) bool {
 }
 
 func updateEnvironmentFile(path string, cookies cookiePair) error {
+	return updateEnvironmentFileWithRename(path, cookies, os.Rename)
+}
+
+func updateEnvironmentFileWithRename(path string, cookies cookiePair, rename func(string, string) error) error {
 	if strings.ContainsAny(cookies.Auth, "\r\n") || strings.ContainsAny(cookies.TwoFactor, "\r\n") {
 		return errors.New("refusing to write a cookie containing a newline")
 	}
@@ -240,30 +388,61 @@ func updateEnvironmentFile(path string, cookies cookiePair) error {
 		"VRC_TWO_FACTOR_AUTH_TOKEN": cookies.TwoFactor,
 	}
 	found := make(map[string]bool)
-	lines := strings.Split(strings.TrimSuffix(string(data), "\n"), "\n")
-	for i, line := range lines {
-		trimmed := strings.TrimSpace(line)
+	newline := "\n"
+	if bytes.Contains(data, []byte("\r\n")) {
+		newline = "\r\n"
+	}
+	var updated strings.Builder
+	for len(data) > 0 {
+		lineEnd := bytes.IndexByte(data, '\n')
+		var line []byte
+		if lineEnd < 0 {
+			line = data
+			data = nil
+		} else {
+			line = data[:lineEnd+1]
+			data = data[lineEnd+1:]
+		}
+
+		contentEnd := len(line)
+		if contentEnd > 0 && line[contentEnd-1] == '\n' {
+			contentEnd--
+			if contentEnd > 0 && line[contentEnd-1] == '\r' {
+				contentEnd--
+			}
+		}
+		content := string(line[:contentEnd])
+		ending := string(line[contentEnd:])
+		trimmed := strings.TrimSpace(content)
 		if trimmed == "" || strings.HasPrefix(trimmed, "#") || strings.HasPrefix(trimmed, ";") {
+			updated.WriteString(string(line))
 			continue
 		}
 		parts := strings.SplitN(strings.TrimPrefix(trimmed, "export "), "=", 2)
 		if len(parts) != 2 {
+			updated.WriteString(string(line))
 			continue
 		}
 		key := strings.TrimSpace(parts[0])
 		value, replace := replacements[key]
 		if !replace {
+			updated.WriteString(string(line))
 			continue
 		}
-		lines[i] = key + "=" + value
+		equals := strings.Index(content, "=")
+		updated.WriteString(content[:equals+1])
+		updated.WriteString(value)
+		updated.WriteString(ending)
 		found[key] = true
+	}
+	if updated.Len() > 0 && !strings.HasSuffix(updated.String(), "\n") {
+		updated.WriteString(newline)
 	}
 	for _, key := range []string{"VRC_AUTH_TOKEN", "VRC_TWO_FACTOR_AUTH_TOKEN"} {
 		if !found[key] {
-			lines = append(lines, key+"="+replacements[key])
+			updated.WriteString(key + "=" + replacements[key] + newline)
 		}
 	}
-	updated := strings.Join(lines, "\n") + "\n"
 
 	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
 	if err != nil {
@@ -276,7 +455,11 @@ func updateEnvironmentFile(path string, cookies cookiePair) error {
 		tmp.Close()
 		return err
 	}
-	if _, err := io.WriteString(tmp, updated); err != nil {
+	if err := preserveFileOwnership(tmp, info); err != nil {
+		tmp.Close()
+		return err
+	}
+	if _, err := io.WriteString(tmp, updated.String()); err != nil {
 		tmp.Close()
 		return err
 	}
@@ -287,7 +470,10 @@ func updateEnvironmentFile(path string, cookies cookiePair) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmpName, path)
+	if err := rename(tmpName, path); err != nil {
+		return err
+	}
+	return syncParentDirectory(path)
 }
 
 func printCookies(w io.Writer, cookies cookiePair) {

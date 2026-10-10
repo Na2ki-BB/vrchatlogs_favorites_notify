@@ -238,22 +238,32 @@ VRC_USER_AGENT="vrchat-friendnotify-auth/1.0 contact@example.com"
 - `VRC_TOTP_SECRET` is the Base32 seed registered with the authenticator app, not a current six-digit code or an `otpauth://` URI.
 - Replace the `VRC_USER_AGENT` contact with an email address or other contact you receive.
 
-Generate the cookies, update both cookie entries in `/etc/vrchat-logger.env`, and restart the service:
+When started from a terminal without options, the command generates the cookies, displays the resolved environment-file path,
+and asks whether to update it. `y` / `yes` updates it; `n` / `no`, an empty answer, or EOF safely skips the update.
+In either case the cookies are written to stdout. Prompts and results go to stderr so stdout remains pipe-friendly.
+
+```bash
+sudo go run ./cmd/vrchat-auth-cookies
+```
+
+To update both cookie entries in `/etc/vrchat-logger.env` without a prompt, keep using the explicit legacy mode below.
+This mode does not print cookies to stdout.
 
 ```bash
 sudo go run ./cmd/vrchat-auth-cookies -update-env
 sudo systemctl restart vrchatlogs-favorites-notify.service
 ```
 
-The command reads `/etc/vrchat-logger.env` directly by default, so no `set -a` or `source` command is needed. Without `-update-env`,
-the file is left unchanged and the command prints only:
+The command reads `/etc/vrchat-logger.env` directly by default, so no `set -a` or `source` command is needed. When stdin is not a TTY,
+or when flags such as `-env-file` are explicit without `-interactive`, the legacy behavior is preserved: the file is left unchanged and
+the command prints only:
 
 ```text
 VRC_AUTH_TOKEN=authcookie_...
 VRC_TWO_FACTOR_AUTH_TOKEN=...
 ```
 
-Use `-env-file /path/to/file` only when the settings are stored elsewhere. Each generator run creates a new login session,
+Use `-env-file /path/to/file -interactive` to prompt for an alternate environment file. Each generator run creates a new login session,
 so do not run it periodically or on every service start. Treat the output cookies, password, and TOTP seed as credentials;
 do not put them in Git, logs, or shell history. TOTP also requires an NTP-synchronized system clock.
 

@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/cookiejar"
@@ -75,6 +77,174 @@ func TestUpdateEnvironmentFile(t *testing.T) {
 	}
 	if info.Mode().Perm() != 0o600 {
 		t.Fatalf("mode = %04o, want 0600", info.Mode().Perm())
+	}
+}
+
+func TestUpdateEnvironmentFilePreservesUnrelatedBytesAndLineEndings(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "vrchat-logger.env")
+	original := "# keep exactly\r\nexport VRC_AUTH_TOKEN = old-auth\r\nUNCHANGED = spaced value  \r\n"
+	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := updateEnvironmentFile(path, cookiePair{Auth: "new-auth", TwoFactor: "new-two-factor"}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "# keep exactly\r\nexport VRC_AUTH_TOKEN =new-auth\r\nUNCHANGED = spaced value  \r\nVRC_TWO_FACTOR_AUTH_TOKEN=new-two-factor\r\n"
+	if string(data) != want {
+		t.Fatalf("updated file did not preserve unrelated bytes: got %q, want %q", data, want)
+	}
+}
+
+func TestUpdateEnvironmentFileRenameFailureLeavesOriginalAndRemovesTemporaryFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "vrchat-logger.env")
+	original := []byte("VRC_AUTH_TOKEN=old-auth\nVRC_TWO_FACTOR_AUTH_TOKEN=old-two-factor\n")
+	if err := os.WriteFile(path, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	err := updateEnvironmentFileWithRename(path, cookiePair{Auth: "new-auth", TwoFactor: "new-two-factor"}, func(string, string) error {
+		return errors.New("injected rename failure")
+	})
+	if err == nil || !strings.Contains(err.Error(), "injected rename failure") {
+		t.Fatalf("error = %v, want injected rename failure", err)
+	}
+	data, readErr := os.ReadFile(path)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if !bytes.Equal(data, original) {
+		t.Fatalf("original changed after failed replace: got %q", data)
+	}
+	entries, readDirErr := os.ReadDir(dir)
+	if readDirErr != nil {
+		t.Fatal(readDirErr)
+	}
+	if len(entries) != 1 || entries[0].Name() != filepath.Base(path) {
+		t.Fatalf("temporary file remained after failure: %#v", entries)
+	}
+}
+
+func TestHandleCookieOutputInteractiveYesUpdatesAndPrintsCookies(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	updated := false
+	err := handleCookieOutput(
+		strings.NewReader("yes\n"),
+		&stdout,
+		&stderr,
+		cookiePair{Auth: "dummy-auth", TwoFactor: "dummy-two-factor"},
+		cookieOutputOptions{envFile: "/safe/test.env", interactive: true, resultFD: -1},
+		func(path string, cookies cookiePair) error {
+			updated = true
+			if path != "/safe/test.env" || cookies.Auth != "dummy-auth" {
+				t.Fatalf("unexpected update arguments: %q, %#v", path, cookies)
+			}
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !updated {
+		t.Fatal("environment updater was not called")
+	}
+	if !strings.Contains(stdout.String(), "VRC_AUTH_TOKEN=dummy-auth\n") {
+		t.Fatalf("stdout did not contain machine-readable cookies: %q", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "updated /safe/test.env") {
+		t.Fatalf("stderr did not report the updated path: %q", stderr.String())
+	}
+}
+
+func TestHandleCookieOutputInteractiveNoSkipsUpdate(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	err := handleCookieOutput(
+		strings.NewReader("maybe\nno\n"),
+		&stdout,
+		&stderr,
+		cookiePair{Auth: "dummy-auth", TwoFactor: "dummy-two-factor"},
+		cookieOutputOptions{envFile: "/safe/test.env", interactive: true, resultFD: -1},
+		func(string, cookiePair) error {
+			t.Fatal("environment updater must not be called")
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stderr.String(), "please answer y/yes or n/no") {
+		t.Fatalf("unknown answer was not rejected: %q", stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "VRC_AUTH_TOKEN=dummy-auth\n") {
+		t.Fatalf("stdout did not contain cookies after declining: %q", stdout.String())
+	}
+}
+
+func TestHandleCookieOutputInteractiveEOFIsSafeRefusal(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	err := handleCookieOutput(
+		strings.NewReader(""),
+		&stdout,
+		&stderr,
+		cookiePair{Auth: "dummy-auth", TwoFactor: "dummy-two-factor"},
+		cookieOutputOptions{envFile: "/safe/test.env", interactive: true, resultFD: -1},
+		func(string, cookiePair) error {
+			t.Fatal("environment updater must not be called on EOF")
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stderr.String(), "will not be changed") {
+		t.Fatalf("EOF refusal was not reported: %q", stderr.String())
+	}
+	if stdout.Len() == 0 {
+		t.Fatal("cookies should still be printed after a safe refusal")
+	}
+}
+
+func TestHandleCookieOutputUpdateFailurePrintsNoCookies(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	err := handleCookieOutput(
+		strings.NewReader("y\n"),
+		&stdout,
+		&stderr,
+		cookiePair{Auth: "dummy-auth", TwoFactor: "dummy-two-factor"},
+		cookieOutputOptions{envFile: "/safe/test.env", interactive: true, resultFD: -1},
+		func(string, cookiePair) error { return errors.New("injected update failure") },
+	)
+	if err == nil || !strings.Contains(err.Error(), "injected update failure") {
+		t.Fatalf("error = %v, want injected update failure", err)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout leaked cookies after update failure: %q", stdout.String())
+	}
+}
+
+func TestHandleCookieOutputExplicitUpdateKeepsCookiesOffStdout(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	err := handleCookieOutput(
+		strings.NewReader(""),
+		&stdout,
+		&stderr,
+		cookiePair{Auth: "dummy-auth", TwoFactor: "dummy-two-factor"},
+		cookieOutputOptions{envFile: "/safe/test.env", updateEnv: true, resultFD: -1},
+		func(string, cookiePair) error { return nil },
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("explicit -update-env printed cookies: %q", stdout.String())
+	}
+	if strings.Contains(stderr.String(), "dummy-auth") || strings.Contains(stderr.String(), "dummy-two-factor") {
+		t.Fatalf("diagnostics exposed cookie values: %q", stderr.String())
 	}
 }
 
